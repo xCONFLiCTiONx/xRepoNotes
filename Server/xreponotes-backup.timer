@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily RepoNotes database backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=xreponotes-backup.service
+
+[Install]
+WantedBy=timers.target

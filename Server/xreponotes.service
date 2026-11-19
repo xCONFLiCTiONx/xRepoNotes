@@ -1,0 +1,23 @@
+[Unit]
+Description=RepoNotes central notes API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xreponotes
+Group=xreponotes
+WorkingDirectory=/opt/xreponotes/server
+EnvironmentFile=/etc/xreponotes/server.env
+ExecStart=/usr/bin/dotnet /opt/xreponotes/server/RepoNotes.Server.dll
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xreponotes
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

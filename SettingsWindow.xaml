@@ -1,0 +1,103 @@
+<Window x:Class="RepoNotes.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings" Width="920" Height="700" MinWidth="680" MinHeight="520" MaxWidth="1680" MaxHeight="1000" ResizeMode="CanResize"
+        Icon="/xRepoNotes;component/icons/icon.ico"
+        WindowStartupLocation="Manual" ShowInTaskbar="False"
+        Background="{StaticResource Bg0}" Foreground="{StaticResource Text}" FontFamily="Segoe UI" FontSize="13"
+        Opacity="1">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="24">
+        <TextBlock Text="Settings" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,16"/>
+
+        <!-- Repos Directory -->
+        <TextBlock Text="Main repos directory" FontWeight="SemiBold"/>
+        <TextBlock Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,2,0,8"
+                   Text="Folders inside it that contain a .git directory are listed as projects."/>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBox x:Name="RootBox"/>
+            <Button Grid.Column="1" Content="Browse…" Margin="8,0,0,0" Click="Browse_Click"/>
+        </Grid>
+
+        <Border Height="1" Background="{StaticResource Border}" Margin="0,18,0,14"/>
+
+        <!-- Central notes database -->
+        <DockPanel Margin="0,0,0,10">
+            <Button DockPanel.Dock="Right" Content="Test database" Padding="10,4" Click="TestNotesApi_Click"/>
+            <TextBlock Text="Central xServer database" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+        </DockPanel>
+        <TextBlock Text="Notes API URL" FontWeight="SemiBold"/>
+        <TextBlock Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,2,0,6"
+                   Text="Base URL of your RepoNotes server. Leave blank to store notes locally only."/>
+        <TextBox x:Name="NotesApiUrlBox"/>
+        <TextBlock Text="Notes API key" FontWeight="SemiBold" Margin="0,10,0,4"/>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <PasswordBox x:Name="NotesApiKeyBox"/>
+            <Button Grid.Column="1" Content="Clear" Margin="8,0,0,0" Padding="10,4" Click="ClearNotesApiKey_Click"/>
+        </Grid>
+
+        <Border Height="1" Background="{StaticResource Border}" Margin="0,14,0,10"/>
+        <DockPanel>
+            <Button DockPanel.Dock="Right" Content="Import local notes…" Padding="10,4" Click="ImportBackup_Click"/>
+            <TextBlock Text="Import local notes backup" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+        </DockPanel>
+        <TextBlock Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,4,0,0"
+                   Text="Import a previously exported xRepoNotes SQLite backup into the central xServer database. Existing notes with matching IDs are replaced; other notes remain unchanged."/>
+
+        <Border Height="1" Background="{StaticResource Border}" Margin="0,18,0,14"/>
+
+        <DockPanel Margin="0,0,0,10">
+            <Button DockPanel.Dock="Right" x:Name="TestConnBtn" Content="⚡ Test connection" Padding="10,4" Click="TestConnection_Click"/>
+            <TextBlock Text="AI Configuration" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+        </DockPanel>
+
+        <!-- AI Server URL -->
+        <TextBlock Text="AI Server URL (Optional)" FontWeight="SemiBold"/>
+        <TextBlock Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,2,0,6"
+                   Text="Base URL of your Ollama or OpenAI-compatible AI server. Leave blank to use Gemini cloud."/>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBox x:Name="UrlBox"/>
+            <Button Grid.Column="1" x:Name="FetchModelsBtn" Content="🔍 Fetch models" Margin="8,0,0,0" Padding="10,4" Click="FetchModels_Click"/>
+        </Grid>
+
+        <!-- AI Model Name -->
+        <TextBlock Text="AI Model Name" FontWeight="SemiBold" Margin="0,14,0,0"/>
+        <TextBlock Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,2,0,6"
+                   Text="Select a model from the server or enter a model name (e.g. xAssistant:latest, llama3:8b, gemini-2.5-flash)."/>
+        <ComboBox x:Name="ModelBox" IsEditable="True" MaxDropDownHeight="220" SelectionChanged="ModelBox_SelectionChanged"/>
+
+        <!-- API Key -->
+        <DockPanel Margin="0,14,0,0">
+            <TextBlock Text="API Key" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <Border x:Name="KeyStatusBadgeBorder" Margin="8,0,0,0" Padding="6,1" CornerRadius="4" VerticalAlignment="Center" Background="#22272E">
+                <TextBlock x:Name="KeyStatusBadge" Text="● NOT SET" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextDim}"/>
+            </Border>
+        </DockPanel>
+        <TextBlock x:Name="KeyHint" Style="{StaticResource Dim}" TextWrapping="Wrap" Margin="0,2,0,6"
+                   Text="Required for cloud services (Gemini) or authenticated servers (xAssistant). Stored encrypted."/>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <PasswordBox x:Name="KeyBox" PasswordChanged="KeyBox_PasswordChanged"/>
+            <TextBox x:Name="KeyTextBox" Visibility="Collapsed" TextChanged="KeyTextBox_TextChanged"/>
+            <Button Grid.Column="1" x:Name="ToggleKeyBtn" Content="👁 Show" Margin="8,0,0,0" Padding="8,4" Click="ToggleKey_Click"/>
+            <Button Grid.Column="2" Content="Clear key" Margin="8,0,0,0" Padding="10,4" Click="ClearKey_Click"/>
+        </Grid>
+
+        <!-- Status / Output Message -->
+        <TextBlock x:Name="StatusText" TextWrapping="Wrap" Margin="0,12,0,0" Visibility="Collapsed" FontSize="12"/>
+
+        <!-- Buttons -->
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,24,0,0">
+            <Button Content="Cancel" MinWidth="84" Margin="0,0,8,0" IsCancel="True"/>
+            <Button Content="Save" MinWidth="84" Style="{StaticResource PrimaryButton}" IsDefault="True" Click="Save_Click"/>
+        </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+</Window>

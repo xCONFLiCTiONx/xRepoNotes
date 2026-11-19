@@ -1,0 +1,18 @@
+[Unit]
+Description=Create a consistent RepoNotes SQLite backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=xreponotes
+Group=xreponotes
+Environment=REPONOTES_DATABASE=/var/lib/xreponotes/notes.db
+Environment=REPONOTES_BACKUP_DIR=/var/backups/xreponotes
+Environment=REPONOTES_BACKUP_RETENTION_DAYS=14
+ExecStart=/usr/bin/python3 /opt/xreponotes/server/backup.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xreponotes /var/backups/xreponotes
+UMask=0077

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>xRepoNotes</AssemblyName>
+    <RootNamespace>RepoNotes</RootNamespace>
+    <TieredCompilation>true</TieredCompilation>
+    <ApplicationIcon>icons\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The server is a separate ASP.NET Core project; do not compile its entry point into WPF. -->
+    <Compile Remove="Server/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="icons\icon.ico" />
+    <Resource Include="icons\icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <!-- Override Microsoft.Data.Sqlite 10.0.0 transitive SQLitePCLRaw 2.1.11 with the patched 2.1.12 bundle. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+</Project>
