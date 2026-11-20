@@ -58,7 +58,7 @@ The `Server/` project provides the central notes API for Windows and Android cli
 
 ## Native Android app
 
-The native Android project is in [`Android/`](Android/README.md). It provides the Notes, File editor, and Settings drawer destinations, connects to the central API, encrypts the API key with Android Keystore, and registers Android file-open/share intents. Open the `Android/` folder in Android Studio to build it.
+The native Android project is in [`android/`](android/README.md). It provides the Notes, File editor, and Settings drawer destinations, connects to the central API, encrypts the API key with Android Keystore, and registers Android file-open/share intents. Open the `android/` folder in Android Studio or run `.\android\.build.ps1` to build it.
 
 **File Editor parity note:** Android currently supports opening and saving text files from Android storage and external apps. The existing xAssistant workspace editor (`~/xAssistant/web/server.py` and `web/static/index.html`) still needs to be ported so folder browsing, multi-file upload, download, and refresh are preserved.
 
@@ -144,7 +144,7 @@ dotnet publish -c Release -o ./publish
 
 ```
 E:\xRepoNotes\
-├── Android/                  # Native Android client
+├── android/                  # Native Android client
 ├── Server/                   # Central xServer API and SQLite backup service
 ├── .build.ps1                # PowerShell build, run, and publish script
 ├── README.md                 # Project documentation and guide

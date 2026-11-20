@@ -1,6 +1,6 @@
 # RepoNotes Android
 
-This is the native Android client for the central RepoNotes API. Open the `Android/` directory in Android Studio and let Gradle sync.
+This is the native Android client for the central RepoNotes API. Open the `android/` directory in Android Studio and let Gradle sync, or run `.\.build.ps1` from `android/` to build (and install/launch if a device is connected over ADB).
 
 ## Screens
 
