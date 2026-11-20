@@ -1,31 +1,36 @@
-# RepoNotes Android
+# xRepoNotes
 
-This is the native Android client for the central RepoNotes API. Open the `android/` directory in Android Studio and let Gradle sync, or run `.\.build.ps1` from `android/` to build (and install/launch if a device is connected over ADB).
+> xRepoNotes Mobile — Android companion app for xRepoNotes
 
-## Screens
+## Table of Contents
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Notes Synchronization](#notes-synchronization)
+- [License](#license)
 
-The left drawer is closed by default and contains exactly three destinations:
+## Features
+- 🚀 Fast, lightweight Jetpack Compose editor and Markdown notebook
+- ⚙️ Personal Notebook and Work Notebook dual views
+- 🔄 Seamless sync with xServer and desktop xRepoNotes companion
 
-1. Notes
-2. File editor
-3. Settings
+## Notes Synchronization
 
-Notes are read and written through the xServer API. The API key is encrypted using an AES-GCM key held by Android Keystore.
+- Personal Notebook and Work Notebook notes are saved locally in SQLite before any network request.
+- Each page has a stable client ID so a retry after a lost response does not create duplicate server notes.
+- Failed syncs remain in the local SQLite database and are retried when connectivity returns.
+- WorkManager schedules a connected-network sync every 15 minutes, an immediate sync on app startup, and exponential-backoff retries after failures. WorkManager persists scheduled work across device reboots.
+- Pending deletions remain as local tombstones until the server confirms them. Conflicting remote edits are retained for review rather than silently deleted.
 
-## File editor and Android integration
+## Prerequisites
+- Android Studio / Android SDK (Min SDK 24, Target SDK 37)
 
-The app registers for `ACTION_VIEW`, `ACTION_SEND`, and `ACTION_SEND_MULTIPLE` with a broad MIME filter so Android can offer RepoNotes for files whose MIME type or extension is unknown. The editor then inspects the actual file contents rather than trusting the extension. Multiple shared files are opened sequentially from the in-app queue.
+## Installation
+```bash
+# Clone repository
+git clone <repository-url>
+cd xRepoNotes-Mobile
+```
 
-- Text files are accepted regardless of filename extension.
-- UTF-8, UTF-8 BOM, UTF-16 LE/BE BOM, and Windows-1252 text are recognized.
-- SQLite/database extensions and SQLite signatures are rejected.
-- Binary content is rejected using NUL-byte and control-character checks.
-- Files selected through Android's Storage Access Framework can be edited and saved when the provider grants write access; otherwise use **Save As**.
-
-The current editor has a 20 MB safety limit. This is an initial mobile implementation; additional editing behavior from the existing File Editor still needs to be reconciled once its source is available.
-
-## Connection
-
-Set the API base URL and API key in Settings (for example, `http://<your-server-ip>:11436` for direct local LAN access, or an HTTPS hostname for remote access). When away, connect via your private VPN/tunnel route or an HTTPS endpoint.
-
-The API key is stored encrypted at rest with Android Keystore. Do not commit API keys or place them in Gradle files.
+## License
+This project is licensed under the terms specified in the [LICENSE](LICENSE) file.

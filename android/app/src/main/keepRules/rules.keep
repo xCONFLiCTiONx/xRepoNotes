@@ -1,0 +1,7 @@
+# Keep rules to prevent IllegalAccessError on internal kotlin/androidx classes
+-keep class kotlin.** { *; }
+-keep class kotlinx.** { *; }
+-keep class androidx.** { *; }
+-keepclassmembers class * {
+    @androidx.room.* *;
+}
