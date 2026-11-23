@@ -290,45 +290,74 @@ class MainViewModel : ViewModel() {
     }
 
     private var autoSyncJob: Job? = null
+    private var pendingSyncAfterEdit: Boolean = false
+
+    fun setEditingNote(context: Context, editing: Boolean) {
+        NotebookSyncEngine.isEditingNote = editing
+        if (editing) {
+            autoSyncJob?.cancel()
+        } else if (pendingSyncAfterEdit) {
+            pendingSyncAfterEdit = false
+            scheduleAutoSync(context, delayMs = 300L)
+        }
+    }
 
     fun scheduleAutoSync(context: Context, delayMs: Long = 1200L) {
+        if (NotebookSyncEngine.isEditingNote) {
+            pendingSyncAfterEdit = true
+            autoSyncJob?.cancel()
+            return
+        }
         val appContext = context.applicationContext
         autoSyncJob?.cancel()
         autoSyncJob = viewModelScope.launch {
             delay(delayMs)
+            if (NotebookSyncEngine.isEditingNote) {
+                pendingSyncAfterEdit = true
+                return@launch
+            }
             syncNotesInternal(appContext, silent = true)
         }
     }
 
     fun triggerManualSync(context: Context) {
         viewModelScope.launch {
-            syncNotesInternal(context, silent = false)
+            syncNotesInternal(context, silent = false, force = true)
         }
     }
 
-    private suspend fun syncNotesInternal(context: Context, silent: Boolean) {
+    private suspend fun syncNotesInternal(context: Context, silent: Boolean, force: Boolean = false) {
+        if (!force && NotebookSyncEngine.isEditingNote) {
+            pendingSyncAfterEdit = true
+            return
+        }
         _isSyncing.value = true
         if (!silent) _isLoading.value = true
 
-        val result = NotebookSyncEngine.sync(context, _serverUrl.value, _apiKey.value)
+        val result = NotebookSyncEngine.sync(context, _serverUrl.value, _apiKey.value, force = force)
         _isSyncing.value = false
         if (!silent) _isLoading.value = false
 
         when (result) {
+            is SyncResult.Deferred -> {
+                pendingSyncAfterEdit = true
+            }
             is SyncResult.Success -> {
-                _notebookRefreshVersion.value += 1
-                refreshLocalNotes(context)
-                val currentActive = _activeRepoNote.value
-                if (currentActive != null) {
-                    val dbHelper = NotesDatabaseHelper(context)
-                    val updated = dbHelper.getNoteById(currentActive.id)
-                    if (updated != null && updated.body != currentActive.body) {
-                        _activeRepoNote.value = updated
-                        _document.value = _document.value.copy(
-                            content = updated.body,
-                            initialContent = updated.body
-                        )
-                        _textFieldValue.value = TextFieldValue(updated.body)
+                if (result.hasChanges) {
+                    _notebookRefreshVersion.value += 1
+                    refreshLocalNotes(context)
+                    val currentActive = _activeRepoNote.value
+                    if (currentActive != null) {
+                        val dbHelper = NotesDatabaseHelper(context)
+                        val updated = dbHelper.getNoteById(currentActive.id)
+                        if (updated != null && updated.body != currentActive.body) {
+                            _activeRepoNote.value = updated
+                            _document.value = _document.value.copy(
+                                content = updated.body,
+                                initialContent = updated.body
+                            )
+                            _textFieldValue.value = TextFieldValue(updated.body)
+                        }
                     }
                 }
                 if (!silent) {

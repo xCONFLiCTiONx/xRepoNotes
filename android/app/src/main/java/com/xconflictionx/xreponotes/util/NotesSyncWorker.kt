@@ -24,8 +24,11 @@ class NotesSyncWorker(
         val apiKey = ApiKeyStore.read(applicationContext).orEmpty()
         if (apiKey.isBlank()) return Result.success()
 
-        return when (val result = NotebookSyncEngine.sync(applicationContext, serverUrl, apiKey)) {
+        if (NotebookSyncEngine.isEditingNote) return Result.retry()
+
+        return when (NotebookSyncEngine.sync(applicationContext, serverUrl, apiKey)) {
             is SyncResult.Success -> Result.success()
+            is SyncResult.Deferred -> Result.retry()
             is SyncResult.Failure -> Result.retry()
         }
     }

@@ -51,6 +51,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import com.xconflictionx.xreponotes.util.NoteImageStore
+import com.xconflictionx.xreponotes.util.NotebookSyncEngine
 import com.xconflictionx.xreponotes.ui.theme.cardColorForAccent
 import com.xconflictionx.xreponotes.ui.theme.chipColorForAccent
 import com.xconflictionx.xreponotes.ui.theme.projectAccentColor
@@ -164,6 +165,20 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
         mutate { all -> all.map { nb -> if (nb.id != notebook.id) nb else nb.copy(sections = nb.sections.map { sec -> if (sec.id != section.id) sec else sec.copy(pages = sec.pages.map { p -> if (p.id == page.id) p.copy(title = title, content = body, updatedAt = System.currentTimeMillis(), isDirty = true) else p }) }) } }
         viewModel.scheduleAutoSync(context)
     }
+    val isActivelyEditing = destination == Destination.NOTES && noteOpen && !previewMode
+    LaunchedEffect(isActivelyEditing) {
+        if (isActivelyEditing) {
+            viewModel.setEditingNote(context, true)
+        } else {
+            persistNotebooks(notebooks)
+            viewModel.setEditingNote(context, false)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            NotebookSyncEngine.isEditingNote = false
+        }
+    }
     LaunchedEffect(page.id) { pageTitle = page.title; pageContent = page.content }
     LaunchedEffect(fileEditorOpenRequestVersion) {
         if (fileEditorOpenRequestVersion > 0) {
@@ -174,8 +189,14 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
     }
     LaunchedEffect(notebookRefreshVersion) {
         if (notebookRefreshVersion > 0) {
+            // Never interrupt or overwrite the UI while the user is actively creating or editing a note.
+            if (isActivelyEditing) return@LaunchedEffect
+
             val currentNotebookTitle = notebook.title
             val currentSectionRepoPath = section.repoPath
+            val currentPageId = page.id
+            val currentPageClientId = page.clientId
+            val currentPagePcId = page.pcId
             val refreshed = store.load() + workStore.load() + vaultStore.load()
             notebooks = refreshed
             val selectedNotebook = refreshed.firstOrNull { it.id == notebookId }
@@ -184,12 +205,22 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
             val selectedSection = selectedNotebook.sections.firstOrNull { it.id == sectionId }
                 ?: selectedNotebook.sections.firstOrNull { it.repoPath.equals(currentSectionRepoPath, ignoreCase = true) }
                 ?: selectedNotebook.sections.first()
-            val selectedPage = selectedSection.pages.firstOrNull { it.id == pageId } ?: selectedSection.pages.first()
+            val matchedPage = selectedSection.pages.firstOrNull { it.id == currentPageId }
+                ?: selectedSection.pages.firstOrNull { currentPageClientId.isNotBlank() && it.clientId == currentPageClientId }
+                ?: selectedSection.pages.firstOrNull { currentPagePcId > 0L && it.pcId == currentPagePcId }
+
             notebookId = selectedNotebook.id
             sectionId = selectedSection.id
-            pageId = selectedPage.id
-            pageTitle = selectedPage.title
-            pageContent = selectedPage.content
+            if (matchedPage != null) {
+                pageId = matchedPage.id
+                if (pageTitle != matchedPage.title) pageTitle = matchedPage.title
+                if (pageContent != matchedPage.content) pageContent = matchedPage.content
+            } else if (!noteOpen) {
+                val fallback = selectedSection.pages.first()
+                pageId = fallback.id
+                pageTitle = fallback.title
+                pageContent = fallback.content
+            }
         }
     }
     LaunchedEffect(notebooks) {
@@ -484,15 +515,23 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                         }
                                         val p = when {
                                             isWorkNotebook -> {
-                                                val id = nextWorkNoteId(targetSection.pages)
-                                                NotePage(id = id, clientId = "work:$id", title = "New note")
+                                                val rawId = nextWorkNoteId(targetSection.pages)
+                                                val cid = "work:$rawId"
+                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "New note")
                                             }
                                             isVaultNotebook -> {
-                                                val id = UUID.randomUUID().toString()
-                                                NotePage(id = id, clientId = "vault:$id", title = "New note")
+                                                val rawId = UUID.randomUUID().toString()
+                                                val cid = "vault:$rawId"
+                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "New note")
                                             }
-                                            else -> NotePage(title = "New note")
+                                            else -> {
+                                                val rawId = UUID.randomUUID().toString()
+                                                val cid = "local:$rawId"
+                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "New note")
+                                            }
                                         }
+                                        // Pause sync immediately before opening the new note so launch/background sync cannot race with creation
+                                        viewModel.setEditingNote(context, true)
                                         mutate { all -> all.map { n -> if (n.id == notebook.id) n.copy(sections = n.sections.map { sec -> if (sec.id == targetSection.id) sec.copy(pages = sec.pages + p) else sec }) else n } }
                                         sectionId = targetSection.id
                                         pageId = p.id

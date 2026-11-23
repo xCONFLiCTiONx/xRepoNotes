@@ -16,7 +16,13 @@ import java.net.URL
 import kotlin.math.max
 
 sealed class SyncResult {
-    data class Success(val count: Int, val conflicts: Int, val message: String) : SyncResult()
+    data class Success(
+        val count: Int,
+        val conflicts: Int,
+        val message: String,
+        val hasChanges: Boolean = true
+    ) : SyncResult()
+    data object Deferred : SyncResult()
     data class Failure(val errorMessage: String) : SyncResult()
 }
 

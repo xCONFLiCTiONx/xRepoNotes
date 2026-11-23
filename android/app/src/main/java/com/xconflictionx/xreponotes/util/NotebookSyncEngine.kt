@@ -29,7 +29,45 @@ import java.util.UUID
 object NotebookSyncEngine {
     private val syncMutex = Mutex()
 
-    suspend fun sync(context: Context, serverUrl: String, apiKey: String): SyncResult = syncMutex.withLock {
+    /**
+     * True while the user is actively creating or editing a note in the UI.
+     * Background and auto-syncs defer until editing finishes so in-progress
+     * typing is never interrupted or overwritten.
+     */
+    @Volatile
+    var isEditingNote: Boolean = false
+
+    fun stablePageId(clientId: String, pcId: Long = 0L): String {
+        val stableId = if (clientId.isNotBlank()) clientId else "server:$pcId"
+        return "note-" + UUID.nameUUIDFromBytes(stableId.toByteArray(Charsets.UTF_8)).toString()
+    }
+
+    private fun notebooksFingerprint(notebooks: List<Notebook>): String = buildString {
+        for (nb in notebooks) {
+            append(nb.title).append('|')
+            for (sec in nb.sections) {
+                append(sec.title).append(':').append(sec.repoPath).append('[')
+                for (p in sec.pages) {
+                    append(p.id).append('#')
+                        .append(p.clientId).append('#')
+                        .append(p.pcId).append('#')
+                        .append(p.title).append('#')
+                        .append(p.content).append('#')
+                        .append(p.isDirty).append(';')
+                }
+                append(']')
+            }
+            append('\n')
+        }
+    }
+
+    suspend fun sync(
+        context: Context,
+        serverUrl: String,
+        apiKey: String,
+        force: Boolean = false
+    ): SyncResult = syncMutex.withLock {
+        if (!force && isEditingNote) return@withLock SyncResult.Deferred
         withContext(Dispatchers.IO) {
             val store = NotebookStore(context)
             val savedNotebooks = store.load()
@@ -50,6 +88,7 @@ object NotebookSyncEngine {
                 it.title.equals("Work Notebook", true) || it.title.equals(VaultNotebookStore.VAULT_TITLE, true)
             }
             val personal = personalNotebooks.firstOrNull() ?: Notebook(title = "Personal Notebook")
+            val beforeFingerprint = notebooksFingerprint(listOf(personal, workNotebook, vaultNotebook))
             val database = NotesDatabaseHelper(context)
             val catalog = try {
                 NotesSyncEngine.getRepositories(serverUrl, apiKey, context)
@@ -304,17 +343,22 @@ object NotebookSyncEngine {
                 )
             )
 
-            store.save(listOf(rebuiltPersonal))
-            workStore.save(rebuiltWork)
-            vaultStore.save(rebuiltVault)
-            result
+            if (!force && isEditingNote) return@withContext SyncResult.Deferred
+
+            val afterFingerprint = notebooksFingerprint(listOf(rebuiltPersonal, rebuiltWork, rebuiltVault))
+            val hasChanges = afterFingerprint != beforeFingerprint
+            if (hasChanges) {
+                store.save(listOf(rebuiltPersonal))
+                workStore.save(rebuiltWork)
+                vaultStore.save(rebuiltVault)
+            }
+            result.copy(hasChanges = hasChanges)
         }
     }
 
     private fun RepoNote.toPage(): NotePage {
-        val stableId = if (clientId.isNotBlank()) clientId else "server:$pcId"
         return NotePage(
-            id = "note-" + UUID.nameUUIDFromBytes(stableId.toByteArray(Charsets.UTF_8)).toString(),
+            id = stablePageId(clientId, pcId),
             clientId = clientId,
             title = displayTitle,
             content = body,
