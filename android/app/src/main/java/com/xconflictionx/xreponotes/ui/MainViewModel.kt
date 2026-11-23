@@ -117,10 +117,10 @@ class MainViewModel : ViewModel() {
     val fileEditorOpenRequestVersion: StateFlow<Int> = _fileEditorOpenRequestVersion.asStateFlow()
 
     // --- AI Formatting State ---
-    private val _aiServerUrl = MutableStateFlow("")
+    private val _aiServerUrl = MutableStateFlow(AiFormatter.DEFAULT_AI_SERVER_URL)
     val aiServerUrl: StateFlow<String> = _aiServerUrl.asStateFlow()
 
-    private val _aiModel = MutableStateFlow("")
+    private val _aiModel = MutableStateFlow(AiFormatter.DEFAULT_AI_MODEL)
     val aiModel: StateFlow<String> = _aiModel.asStateFlow()
 
     private val _aiApiKey = MutableStateFlow("")
@@ -154,8 +154,10 @@ class MainViewModel : ViewModel() {
             _serverUrl.value = savedUrl
         }
         _apiKey.value = ApiKeyStore.read(context).orEmpty()
-        _aiServerUrl.value = prefs.getString(AiFormatter.PREF_KEY_AI_URL, "").orEmpty()
-        _aiModel.value = prefs.getString(AiFormatter.PREF_KEY_AI_MODEL, "").orEmpty()
+        _aiServerUrl.value = prefs.getString(AiFormatter.PREF_KEY_AI_URL, null)
+            ?.takeIf { it.isNotBlank() } ?: AiFormatter.DEFAULT_AI_SERVER_URL
+        _aiModel.value = prefs.getString(AiFormatter.PREF_KEY_AI_MODEL, null)
+            ?.takeIf { it.isNotBlank() } ?: AiFormatter.DEFAULT_AI_MODEL
         _aiApiKey.value = ApiKeyStore.readAiKey(context).orEmpty()
     }
 

@@ -468,7 +468,7 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                             }
                         }
                         val dashboardCards = notebook.sections.flatMap { sec ->
-                            sec.pages.filter { it.title != "New page" || it.content.isNotBlank() }.map { sec to it }
+                            sec.pages.filter { it.content.isNotBlank() }.map { sec to it }
                         }.filter { item ->
                             when {
                                 isWorkNotebook -> true
@@ -517,17 +517,17 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                             isWorkNotebook -> {
                                                 val rawId = nextWorkNoteId(targetSection.pages)
                                                 val cid = "work:$rawId"
-                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "New note")
+                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "")
                                             }
                                             isVaultNotebook -> {
                                                 val rawId = UUID.randomUUID().toString()
                                                 val cid = "vault:$rawId"
-                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "New note")
+                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "")
                                             }
                                             else -> {
                                                 val rawId = UUID.randomUUID().toString()
                                                 val cid = "local:$rawId"
-                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "New note")
+                                                NotePage(id = NotebookSyncEngine.stablePageId(cid), clientId = cid, title = "")
                                             }
                                         }
                                         // Pause sync immediately before opening the new note so launch/background sync cannot race with creation
@@ -662,8 +662,8 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                                         previewMode = true
                                                     },
                                                     onLongClick = {
-                                                        val rendered = renderMarkdownAsPlainText(item.second.title, item.second.content)
-                                                        copyToClipboard(context, item.second.title.ifBlank { "Note" }, rendered)
+                                                        val rendered = renderMarkdownAsPlainText("", item.second.content)
+                                                        copyToClipboard(context, "Note", rendered)
                                                         Toast.makeText(context, "Copied rendered note", Toast.LENGTH_SHORT).show()
                                                     }
                                                 ),
@@ -673,15 +673,25 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                                 Column {
                                                     Box(Modifier.fillMaxWidth().height(3.dp).background(accent))
                                                     Column(Modifier.padding(10.dp)) {
-                                                        Text(item.second.title.ifBlank { "Untitled" }, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                                                        Spacer(Modifier.height(5.dp))
-                                                        Text(
-                                                            NoteImageStore.replaceImageMarkdownWithPlaceholder(item.second.content),
-                                                            maxLines = 3,
-                                                            style = MaterialTheme.typography.bodySmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                        Spacer(Modifier.height(4.dp))
+                                                        val cardPreview = remember(item.second.content) {
+                                                            renderMarkdownCardPreview(item.second.content)
+                                                        }
+                                                        if (cardPreview.text.isNotBlank()) {
+                                                            Text(
+                                                                text = cardPreview,
+                                                                maxLines = 6,
+                                                                overflow = TextOverflow.Ellipsis,
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = MaterialTheme.colorScheme.onSurface
+                                                            )
+                                                        } else {
+                                                            Text(
+                                                                text = "Empty note",
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                            )
+                                                        }
+                                                        Spacer(Modifier.height(6.dp))
                                                         Surface(color = chipColor, shape = RoundedCornerShape(50)) {
                                                             Text(item.first.title, Modifier.padding(horizontal = 7.dp, vertical = 3.dp), style = MaterialTheme.typography.labelSmall, color = accent, maxLines = 1)
                                                         }
@@ -696,14 +706,23 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                 Text(matches.size.toString() + " matching notes", color = MaterialTheme.colorScheme.primary)
                                 LazyColumn(Modifier.weight(1f)) {
                                     items(matches, key = { it.third.id }) { m ->
+                                        val previewHeadline = remember(m.third.content) {
+                                            renderMarkdownCardPreview(m.third.content)
+                                        }
                                         ListItem(
-                                            headlineContent = { Text(m.third.title) },
+                                            headlineContent = {
+                                                Text(
+                                                    text = previewHeadline.ifEmpty { AnnotatedString("Empty note") },
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            },
                                             supportingContent = { Text(m.second.title) },
                                             modifier = Modifier.combinedClickable(
                                                 onClick = { sectionId = m.second.id; pageId = m.third.id; noteOpen = true; previewMode = true },
                                                 onLongClick = {
-                                                    val rendered = renderMarkdownAsPlainText(m.third.title, m.third.content)
-                                                    copyToClipboard(context, m.third.title.ifBlank { "Note" }, rendered)
+                                                    val rendered = renderMarkdownAsPlainText("", m.third.content)
+                                                    copyToClipboard(context, "Note", rendered)
                                                     Toast.makeText(context, "Copied rendered note", Toast.LENGTH_SHORT).show()
                                                 }
                                             )
@@ -720,17 +739,7 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                 Box(Modifier.fillMaxWidth().height(3.dp).background(noteAccent, RoundedCornerShape(2.dp)))
                                 Spacer(Modifier.height(6.dp))
                                 Text(section.title, style = MaterialTheme.typography.titleSmall, color = noteAccent)
-                                Spacer(Modifier.height(10.dp))
-                                OutlinedTextField(
-                                    value = pageTitle,
-                                    onValueChange = { savePage(title = it) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    readOnly = previewMode,
-                                    placeholder = { Text("Note title") },
-                                    textStyle = MaterialTheme.typography.headlineSmall,
-                                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words)
-                                )
+                                Spacer(Modifier.height(8.dp))
                                 Divider()
                                 Box(
                                     Modifier
@@ -748,8 +757,8 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                                 .combinedClickable(
                                                     onClick = {},
                                                     onLongClick = {
-                                                        val rendered = renderMarkdownAsPlainText(pageTitle, pageContent)
-                                                        copyToClipboard(context, pageTitle.ifBlank { "Note" }, rendered)
+                                                        val rendered = renderMarkdownAsPlainText("", pageContent)
+                                                        copyToClipboard(context, "Note", rendered)
                                                         Toast.makeText(context, "Copied rendered note", Toast.LENGTH_SHORT).show()
                                                     }
                                                 )
@@ -892,12 +901,7 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                         }
                                         TextButton(
                                             onClick = {
-                                                val fullText = if (pageTitle.isNotBlank() && pageContent.isNotBlank()) {
-                                                    "$pageTitle\n\n$pageContent"
-                                                } else {
-                                                    pageContent.ifBlank { pageTitle }
-                                                }
-                                                copyToClipboard(context, pageTitle.ifBlank { "Note" }, fullText)
+                                                copyToClipboard(context, "Note", pageContent)
                                                 Toast.makeText(context, "Copied note with Markdown", Toast.LENGTH_SHORT).show()
                                             }
                                         ) {
@@ -1057,7 +1061,7 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                             Divider()
                             Text("AI Configuration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Text(
-                                "Configure a local/custom Ollama or OpenAI-compatible server, or leave Server URL blank to use Google Gemini cloud.",
+                                "Configured for xAssistant by default (or enter any OpenAI/Ollama-compatible server URL, or leave blank for Gemini cloud).",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1065,8 +1069,8 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                 value = aiUrlDraft,
                                 onValueChange = { aiUrlDraft = it },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("AI Server URL (Optional)") },
-                                placeholder = { Text("e.g. https://ollama.home.xconflictionx.cc") },
+                                label = { Text("AI Server URL") },
+                                placeholder = { Text("https://inference.home.xconflictionx.cc") },
                                 singleLine = true
                             )
                             Box(Modifier.fillMaxWidth()) {
@@ -1075,7 +1079,7 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                     onValueChange = { aiModelDraft = it },
                                     modifier = Modifier.fillMaxWidth(),
                                     label = { Text("AI Model Name") },
-                                    placeholder = { Text("e.g. llama3:8b or gemini-2.5-flash") },
+                                    placeholder = { Text("xAssistant") },
                                     singleLine = true,
                                     trailingIcon = if (aiModels.isNotEmpty()) {
                                         {
@@ -1212,7 +1216,7 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("Delete note?") },
-            text = { Text("“${target.title.ifBlank { "Untitled" }}” will be deleted from xRepoNotes and removed from this device after sync.") },
+            text = { Text("This note will be deleted from xRepoNotes and removed from this device after sync.") },
             confirmButton = {
                 TextButton(onClick = {
                     val updated = notebooks.map { nb ->
@@ -1355,7 +1359,7 @@ private fun MarkdownPreview(
                     Checkbox(checked = !line.startsWith("- [ ] "), onCheckedChange = null)
                     Text(inlineMarkdown(line.drop(6)))
                 }
-                line.startsWith("- ") -> Row(verticalAlignment = Alignment.Top) {
+                line.startsWith("- ") || line.startsWith("* ") -> Row(verticalAlignment = Alignment.Top) {
                     Text("•", modifier = Modifier.padding(end = 8.dp))
                     Text(inlineMarkdown(line.drop(2)))
                 }
@@ -1378,7 +1382,7 @@ private fun MarkdownPreview(
 }
 
 private fun inlineMarkdown(source: String): AnnotatedString {
-    val pattern = Regex("(\\*\\*.+?\\*\\*|\\*.+?\\*|`.+?`)")
+    val pattern = Regex("(\\*\\*.+?\\*\\*|\\*.+?\\*|`.+?`|\\[[^\\]]+]\\([^)]+\\))")
     return buildAnnotatedString {
         var cursor = 0
         pattern.findAll(source).forEach { match ->
@@ -1387,11 +1391,72 @@ private fun inlineMarkdown(source: String): AnnotatedString {
             when {
                 token.startsWith("**") -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(token.removePrefix("**").removeSuffix("**")) }
                 token.startsWith("*") -> withStyle(SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) { append(token.removePrefix("*").removeSuffix("*")) }
-                else -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = MaterialThemeColorCode)) { append(token.removePrefix("`").removeSuffix("`")) }
+                token.startsWith("`") -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = MaterialThemeColorCode)) { append(token.removePrefix("`").removeSuffix("`")) }
+                else -> {
+                    val label = token.substringAfter("[").substringBefore("]")
+                    withStyle(SpanStyle(fontWeight = FontWeight.Medium, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) {
+                        append(label)
+                    }
+                }
             }
             cursor = match.range.last + 1
         }
         append(source.substring(cursor))
+    }
+}
+
+private fun renderMarkdownCardPreview(markdown: String): AnnotatedString {
+    val cleaned = NoteImageStore.replaceImageMarkdownWithPlaceholder(markdown)
+    var inCodeBlock = false
+    val lines = cleaned.lines()
+    return buildAnnotatedString {
+        var firstRendered = true
+        for (rawLine in lines) {
+            val trimmed = rawLine.trim()
+            if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+                inCodeBlock = !inCodeBlock
+                continue
+            }
+            if (!inCodeBlock && trimmed.isEmpty()) continue
+            if (!firstRendered) append('\n')
+            firstRendered = false
+
+            if (inCodeBlock) {
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = MaterialThemeColorCode)) {
+                    append(rawLine.trimEnd())
+                }
+                continue
+            }
+
+            when {
+                trimmed.startsWith("# ") || trimmed.startsWith("## ") ||
+                    trimmed.startsWith("### ") || trimmed.startsWith("#### ") -> {
+                    val headingText = trimmed.replace(Regex("^#{1,6}\\s+"), "")
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(inlineMarkdown(headingText))
+                    }
+                }
+                trimmed.startsWith("- [ ] ") -> {
+                    append("☐ ")
+                    append(inlineMarkdown(trimmed.drop(6)))
+                }
+                trimmed.startsWith("- [x] ") || trimmed.startsWith("- [X] ") -> {
+                    append("☑ ")
+                    append(inlineMarkdown(trimmed.drop(6)))
+                }
+                trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
+                    append("• ")
+                    append(inlineMarkdown(trimmed.drop(2)))
+                }
+                trimmed.startsWith("|") && trimmed.indexOf("|", startIndex = 1) >= 0 -> {
+                    if (!trimmed.contains("---")) {
+                        val cells = trimmed.trim('|').split("|").map { it.trim() }
+                        append(inlineMarkdown(cells.joinToString(" · ")))
+                    }
+                }
+                else -> append(inlineMarkdown(trimmed))
+            }
+        }
     }
 }
 

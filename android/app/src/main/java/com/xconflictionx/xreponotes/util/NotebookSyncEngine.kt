@@ -360,7 +360,7 @@ object NotebookSyncEngine {
         return NotePage(
             id = stablePageId(clientId, pcId),
             clientId = clientId,
-            title = displayTitle,
+            title = title,
             content = body,
             updatedAt = System.currentTimeMillis(),
             localDbId = id,
