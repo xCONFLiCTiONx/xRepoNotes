@@ -41,6 +41,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,6 +83,14 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
     val showUnsaved by viewModel.showUnsavedDialog.collectAsState()
     val notebookRefreshVersion by viewModel.notebookRefreshVersion.collectAsState()
     val fileEditorOpenRequestVersion by viewModel.fileEditorOpenRequestVersion.collectAsState()
+    val aiServerUrl by viewModel.aiServerUrl.collectAsState()
+    val aiModel by viewModel.aiModel.collectAsState()
+    val aiApiKey by viewModel.aiApiKey.collectAsState()
+    val aiModels by viewModel.aiModels.collectAsState()
+    val isFetchingAiModels by viewModel.isFetchingAiModels.collectAsState()
+    val isTestingAiConnection by viewModel.isTestingAiConnection.collectAsState()
+    val isFormattingAi by viewModel.isFormattingAi.collectAsState()
+    val aiDialogInfo by viewModel.aiDialogInfo.collectAsState()
     val store = remember { NotebookStore(context) }
     val workStore = remember { WorkNotebookStore(context) }
     val vaultStore = remember { VaultNotebookStore(context) }
@@ -120,8 +130,22 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
     var themeChoice by remember { mutableStateOf(preferences.getString("theme", legacyPreferences.getString("theme", "Dark")) ?: "Dark") }
     var serverUrlDraft by remember { mutableStateOf(serverUrl) }
     var apiKeyDraft by remember { mutableStateOf(apiKey) }
+    var aiUrlDraft by remember { mutableStateOf(aiServerUrl) }
+    var aiModelDraft by remember { mutableStateOf(aiModel) }
+    var aiKeyDraft by remember { mutableStateOf(aiApiKey) }
+    var aiKeyVisible by remember { mutableStateOf(false) }
+    var aiModelMenuExpanded by remember { mutableStateOf(false) }
+    var undoAiState by remember { mutableStateOf<Pair<String, String>?>(null) }
     LaunchedEffect(serverUrl) { serverUrlDraft = serverUrl }
     LaunchedEffect(apiKey) { apiKeyDraft = apiKey }
+    LaunchedEffect(aiServerUrl) { aiUrlDraft = aiServerUrl }
+    LaunchedEffect(aiModel) { aiModelDraft = aiModel }
+    LaunchedEffect(aiApiKey) { aiKeyDraft = aiApiKey }
+    LaunchedEffect(destination) {
+        if (destination == Destination.SETTINGS && aiModels.isEmpty() && (aiServerUrl.isNotBlank() || aiApiKey.isNotBlank())) {
+            viewModel.fetchAiModels(aiServerUrl, aiApiKey, silent = true)
+        }
+    }
 
     val notebook = notebooks.firstOrNull { it.id == notebookId } ?: notebooks.first()
     val section = notebook.sections.firstOrNull { it.id == sectionId } ?: notebook.sections.first()
@@ -368,6 +392,23 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                             IconButton(onClick = { dialog = "search" }) { Icon(Icons.Default.Search, "Search notes") }
                         }
                         Destination.FILE_EDITOR -> {
+                            IconButton(
+                                onClick = {
+                                    val sent = textValue.text
+                                    viewModel.formatWithAi(sent) { formatted ->
+                                        if (viewModel.textFieldValue.value.text == sent) {
+                                            viewModel.onTextFieldValueChanged(TextFieldValue(formatted))
+                                            Toast.makeText(context, "Formatted with AI", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Document changed while AI was working; result discarded.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                enabled = !isFormattingAi
+                            ) {
+                                if (isFormattingAi) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                else Icon(Icons.Default.AutoAwesome, "Format with AI")
+                            }
                             IconButton(onClick = { viewModel.undo() }, enabled = canUndo) { Text("↶") }
                             IconButton(onClick = { viewModel.redo() }, enabled = canRedo) { Text("↷") }
                             IconButton(onClick = { viewModel.toggleSearch() }) { Icon(Icons.Default.Search, "Find") }
@@ -713,12 +754,79 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                             }
                                         }
                                     }
+                                    if (isFormattingAi) {
+                                        Box(
+                                            Modifier
+                                                .fillMaxSize()
+                                                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.78f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                tonalElevation = 6.dp,
+                                                color = MaterialTheme.colorScheme.surface
+                                            ) {
+                                                Column(
+                                                    Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                                ) {
+                                                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                                                    Text("Formatting with AI…", style = MaterialTheme.typography.bodyMedium)
+                                                    OutlinedButton(onClick = { viewModel.cancelAiFormatting() }) {
+                                                        Text("Cancel")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 Row(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    if (undoAiState?.first == page.id) {
+                                        TextButton(
+                                            onClick = {
+                                                val previous = undoAiState?.second ?: return@TextButton
+                                                savePage(body = previous)
+                                                undoAiState = null
+                                                Toast.makeText(context, "AI formatting undone", Toast.LENGTH_SHORT).show()
+                                            },
+                                            enabled = !isFormattingAi
+                                        ) {
+                                            Icon(Icons.Default.Undo, null)
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Undo AI")
+                                        }
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            val targetPageId = page.id
+                                            val sentBody = pageContent
+                                            viewModel.formatWithAi(sentBody) { formatted ->
+                                                if (page.id != targetPageId || pageContent != sentBody) {
+                                                    Toast.makeText(
+                                                        context,
+                                                        "The note changed while AI was working, so the result was discarded.",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                } else {
+                                                    undoAiState = targetPageId to sentBody
+                                                    savePage(body = formatted)
+                                                    Toast.makeText(context, "Formatted with AI", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
+                                        enabled = !isFormattingAi
+                                    ) {
+                                        Icon(Icons.Default.AutoAwesome, null)
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Format with AI")
+                                    }
                                     if (!previewMode) {
                                         TextButton(
                                             onClick = {
@@ -908,6 +1016,130 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                 Text(if (syncing) "Syncing…" else "Sync now")
                             }
                             Divider()
+                            Text("AI Configuration", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(
+                                "Configure a local/custom Ollama or OpenAI-compatible server, or leave Server URL blank to use Google Gemini cloud.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedTextField(
+                                value = aiUrlDraft,
+                                onValueChange = { aiUrlDraft = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("AI Server URL (Optional)") },
+                                placeholder = { Text("e.g. https://ollama.home.xconflictionx.cc") },
+                                singleLine = true
+                            )
+                            Box(Modifier.fillMaxWidth()) {
+                                OutlinedTextField(
+                                    value = aiModelDraft,
+                                    onValueChange = { aiModelDraft = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("AI Model Name") },
+                                    placeholder = { Text("e.g. llama3:8b or gemini-2.5-flash") },
+                                    singleLine = true,
+                                    trailingIcon = if (aiModels.isNotEmpty()) {
+                                        {
+                                            IconButton(onClick = { aiModelMenuExpanded = !aiModelMenuExpanded }) {
+                                                Icon(Icons.Default.ArrowDropDown, "Choose model")
+                                            }
+                                        }
+                                    } else null
+                                )
+                                DropdownMenu(
+                                    expanded = aiModelMenuExpanded,
+                                    onDismissRequest = { aiModelMenuExpanded = false }
+                                ) {
+                                    aiModels.forEach { m ->
+                                        DropdownMenuItem(
+                                            text = { Text(m) },
+                                            onClick = {
+                                                aiModelDraft = m
+                                                aiModelMenuExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            OutlinedTextField(
+                                value = aiKeyDraft,
+                                onValueChange = { aiKeyDraft = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("AI API Key") },
+                                singleLine = true,
+                                visualTransformation = if (aiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                trailingIcon = {
+                                    IconButton(onClick = { aiKeyVisible = !aiKeyVisible }) {
+                                        Icon(
+                                            if (aiKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                            if (aiKeyVisible) "Hide key" else "Show key"
+                                        )
+                                    }
+                                }
+                            )
+                            Text(
+                                when {
+                                    aiKeyDraft.trim() != aiApiKey.trim() -> "Unsaved API key changes — tap Save AI settings to store encrypted."
+                                    aiApiKey.isNotBlank() -> "AI API key is saved encrypted with Android Keystore."
+                                    else -> "Required for Gemini cloud or authenticated AI servers. Stored encrypted."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { viewModel.fetchAiModels(aiUrlDraft, aiKeyDraft, silent = false) },
+                                    enabled = !isFetchingAiModels && !isTestingAiConnection,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    if (isFetchingAiModels) {
+                                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Fetching…")
+                                    } else {
+                                        Text("Fetch models")
+                                    }
+                                }
+                                OutlinedButton(
+                                    onClick = { viewModel.testAiConnection(aiUrlDraft, aiKeyDraft, aiModelDraft) },
+                                    enabled = !isTestingAiConnection && !isFetchingAiModels,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    if (isTestingAiConnection) {
+                                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Testing…")
+                                    } else {
+                                        Text("Test connection")
+                                    }
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Button(
+                                    onClick = { viewModel.saveAiConfig(context, aiUrlDraft, aiModelDraft, aiKeyDraft) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.AutoAwesome, null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Save AI settings")
+                                }
+                                TextButton(
+                                    onClick = {
+                                        aiKeyDraft = ""
+                                        viewModel.clearAiKey(context)
+                                    }
+                                ) {
+                                    Text("Clear key")
+                                }
+                            }
+                            Divider()
                             Text("Font size: " + fontSize.toInt() + " sp")
                             Slider(fontSize, { fontSize = it }, valueRange = 12f..24f)
                             Divider()
@@ -1002,6 +1234,33 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
             title = { Text("No project selected") },
             text = { Text("Please select a project from the dropdown before creating a new project note.") },
             confirmButton = { TextButton(onClick = { dialog = "" }) { Text("OK") } }
+        )
+    }
+
+    if (aiDialogInfo != null) {
+        val info = aiDialogInfo!!
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissAiDialog() },
+            title = { Text(info.title) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(info.message)
+                }
+            },
+            confirmButton = {
+                if (info.offerOpenSettings) {
+                    TextButton(onClick = {
+                        viewModel.dismissAiDialog()
+                        noteOpen = false
+                        destination = Destination.SETTINGS
+                    }) { Text("Open settings") }
+                } else {
+                    TextButton(onClick = { viewModel.dismissAiDialog() }) { Text("OK") }
+                }
+            },
+            dismissButton = if (info.offerOpenSettings) {
+                { TextButton(onClick = { viewModel.dismissAiDialog() }) { Text("Cancel") } }
+            } else null
         )
     }
 

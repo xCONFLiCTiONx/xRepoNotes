@@ -10,6 +10,8 @@ import com.xconflictionx.xreponotes.data.NotesDatabaseHelper
 import com.xconflictionx.xreponotes.data.NotePage
 import com.xconflictionx.xreponotes.data.RepoNote
 import com.xconflictionx.xreponotes.data.TextDocument
+import com.xconflictionx.xreponotes.util.AiException
+import com.xconflictionx.xreponotes.util.AiFormatter
 import com.xconflictionx.xreponotes.util.ApiKeyStore
 import com.xconflictionx.xreponotes.util.FileHelper
 import com.xconflictionx.xreponotes.util.NotesSyncEngine
@@ -17,6 +19,7 @@ import com.xconflictionx.xreponotes.util.NotesSyncScheduler
 import com.xconflictionx.xreponotes.util.NotebookSyncEngine
 import com.xconflictionx.xreponotes.util.SyncResult
 import com.xconflictionx.xreponotes.util.UndoManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -32,6 +35,12 @@ sealed interface PendingAction {
     data class OpenNote(val note: RepoNote) : PendingAction
     data class OpenSharedText(val text: String) : PendingAction
 }
+
+data class AiDialogInfo(
+    val title: String,
+    val message: String,
+    val offerOpenSettings: Boolean = false
+)
 
 class MainViewModel : ViewModel() {
 
@@ -107,6 +116,33 @@ class MainViewModel : ViewModel() {
     private val _fileEditorOpenRequestVersion = MutableStateFlow(0)
     val fileEditorOpenRequestVersion: StateFlow<Int> = _fileEditorOpenRequestVersion.asStateFlow()
 
+    // --- AI Formatting State ---
+    private val _aiServerUrl = MutableStateFlow("")
+    val aiServerUrl: StateFlow<String> = _aiServerUrl.asStateFlow()
+
+    private val _aiModel = MutableStateFlow("")
+    val aiModel: StateFlow<String> = _aiModel.asStateFlow()
+
+    private val _aiApiKey = MutableStateFlow("")
+    val aiApiKey: StateFlow<String> = _aiApiKey.asStateFlow()
+
+    private val _aiModels = MutableStateFlow<List<String>>(emptyList())
+    val aiModels: StateFlow<List<String>> = _aiModels.asStateFlow()
+
+    private val _isFetchingAiModels = MutableStateFlow(false)
+    val isFetchingAiModels: StateFlow<Boolean> = _isFetchingAiModels.asStateFlow()
+
+    private val _isTestingAiConnection = MutableStateFlow(false)
+    val isTestingAiConnection: StateFlow<Boolean> = _isTestingAiConnection.asStateFlow()
+
+    private val _isFormattingAi = MutableStateFlow(false)
+    val isFormattingAi: StateFlow<Boolean> = _isFormattingAi.asStateFlow()
+
+    private val _aiDialogInfo = MutableStateFlow<AiDialogInfo?>(null)
+    val aiDialogInfo: StateFlow<AiDialogInfo?> = _aiDialogInfo.asStateFlow()
+
+    private var aiFormatJob: Job? = null
+
     private fun loadSyncConfig(context: Context) {
         val prefs = context.getSharedPreferences("xreponotes_prefs", Context.MODE_PRIVATE)
         val legacyPrefs = context.getSharedPreferences("xtexteditor_prefs", Context.MODE_PRIVATE)
@@ -118,6 +154,9 @@ class MainViewModel : ViewModel() {
             _serverUrl.value = savedUrl
         }
         _apiKey.value = ApiKeyStore.read(context).orEmpty()
+        _aiServerUrl.value = prefs.getString(AiFormatter.PREF_KEY_AI_URL, "").orEmpty()
+        _aiModel.value = prefs.getString(AiFormatter.PREF_KEY_AI_MODEL, "").orEmpty()
+        _aiApiKey.value = ApiKeyStore.readAiKey(context).orEmpty()
     }
 
     fun loadNotesOnLaunch(context: Context) {
@@ -329,6 +368,178 @@ class MainViewModel : ViewModel() {
         _apiKey.value = trimmed
         _statusMessage.value = "xRepoNotes API key saved securely"
         NotesSyncScheduler.enqueueImmediate(context)
+    }
+
+    fun saveAiConfig(context: Context, serverUrl: String, model: String, apiKey: String) {
+        val cleanUrl = serverUrl.trim()
+        val cleanModel = model.trim()
+        val cleanKey = apiKey.trim()
+
+        val prefs = context.getSharedPreferences("xreponotes_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString(AiFormatter.PREF_KEY_AI_URL, cleanUrl)
+            .putString(AiFormatter.PREF_KEY_AI_MODEL, cleanModel)
+            .apply()
+        _aiServerUrl.value = cleanUrl
+        _aiModel.value = cleanModel
+
+        if (cleanKey.isEmpty()) {
+            ApiKeyStore.clearAiKey(context)
+            _aiApiKey.value = ""
+        } else {
+            if (!ApiKeyStore.saveAiKey(context, cleanKey)) {
+                _statusMessage.value = "Could not securely save the AI API key"
+                return
+            }
+            _aiApiKey.value = cleanKey
+        }
+        _statusMessage.value = "AI settings saved"
+    }
+
+    fun clearAiKey(context: Context) {
+        ApiKeyStore.clearAiKey(context)
+        _aiApiKey.value = ""
+        _statusMessage.value = "AI API key cleared"
+    }
+
+    fun fetchAiModels(serverUrl: String, apiKey: String, silent: Boolean = false) {
+        val cleanUrl = serverUrl.trim()
+        val cleanKey = apiKey.trim()
+        if (cleanUrl.isEmpty() && cleanKey.isEmpty()) {
+            if (!silent) {
+                _aiDialogInfo.value = AiDialogInfo(
+                    title = "No Models Found",
+                    message = "Enter an AI Server URL or API key first."
+                )
+            }
+            return
+        }
+        viewModelScope.launch {
+            _isFetchingAiModels.value = true
+            try {
+                val models = AiFormatter.fetchModels(cleanUrl, cleanKey)
+                _aiModels.value = models
+                if (models.isNotEmpty() && _aiModel.value.isBlank()) {
+                    _aiModel.value = models.first()
+                }
+                if (!silent) {
+                    if (models.isNotEmpty()) {
+                        _aiDialogInfo.value = AiDialogInfo(
+                            title = "Models Found",
+                            message = "Successfully retrieved ${models.size} model(s):\n\n" +
+                                models.joinToString("\n") { " • $it" }
+                        )
+                    } else {
+                        _aiDialogInfo.value = AiDialogInfo(
+                            title = "No Models Found",
+                            message = "Could not retrieve models list from the server. Check your Server URL or API key."
+                        )
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (ex: Exception) {
+                if (!silent) {
+                    _aiDialogInfo.value = AiDialogInfo(
+                        title = "Error Fetching Models",
+                        message = ex.message ?: "Unknown error"
+                    )
+                }
+            } finally {
+                _isFetchingAiModels.value = false
+            }
+        }
+    }
+
+    fun testAiConnection(serverUrl: String, apiKey: String, model: String) {
+        viewModelScope.launch {
+            _isTestingAiConnection.value = true
+            try {
+                val result = AiFormatter.testConnection(serverUrl, apiKey, model)
+                if (result.models.isNotEmpty()) {
+                    _aiModels.value = result.models
+                }
+                _aiDialogInfo.value = AiDialogInfo(
+                    title = if (result.success) "Connection Successful" else "Connection Failed",
+                    message = result.message
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (ex: Exception) {
+                _aiDialogInfo.value = AiDialogInfo(
+                    title = "Test Connection Error",
+                    message = ex.message ?: "Unknown error"
+                )
+            } finally {
+                _isTestingAiConnection.value = false
+            }
+        }
+    }
+
+    fun formatWithAi(text: String, onFormatted: (String) -> Unit) {
+        if (_isFormattingAi.value) return
+        if (text.isBlank()) {
+            _aiDialogInfo.value = AiDialogInfo(
+                title = "Nothing to format",
+                message = "Add some text to the note first."
+            )
+            return
+        }
+
+        val url = _aiServerUrl.value.trim()
+        val model = _aiModel.value.trim()
+        val key = _aiApiKey.value.trim()
+
+        if (url.isEmpty() && key.isEmpty()) {
+            _aiDialogInfo.value = AiDialogInfo(
+                title = "AI Configuration Needed",
+                message = "To format notes with AI, please configure your AI server URL or API key in Settings.",
+                offerOpenSettings = true
+            )
+            return
+        }
+
+        if (url.isNotEmpty() && model.isEmpty()) {
+            _aiDialogInfo.value = AiDialogInfo(
+                title = "AI Model Name Needed",
+                message = "Please specify the AI model name in Settings (e.g. fast-agent:3b).",
+                offerOpenSettings = true
+            )
+            return
+        }
+
+        aiFormatJob?.cancel()
+        aiFormatJob = viewModelScope.launch {
+            _isFormattingAi.value = true
+            try {
+                val formatted = AiFormatter.format(url, key, model, text)
+                onFormatted(formatted)
+            } catch (_: CancellationException) {
+                // User cancelled
+            } catch (ex: AiException) {
+                _aiDialogInfo.value = AiDialogInfo(
+                    title = "AI formatting didn't apply",
+                    message = ex.message ?: "Formatting failed."
+                )
+            } catch (ex: Exception) {
+                _aiDialogInfo.value = AiDialogInfo(
+                    title = "AI formatting failed",
+                    message = ex.message ?: "Unknown error."
+                )
+            } finally {
+                _isFormattingAi.value = false
+            }
+        }
+    }
+
+    fun cancelAiFormatting() {
+        aiFormatJob?.cancel()
+        aiFormatJob = null
+        _isFormattingAi.value = false
+    }
+
+    fun dismissAiDialog() {
+        _aiDialogInfo.value = null
     }
 
     fun setNotesDrawerVisible(visible: Boolean) {
