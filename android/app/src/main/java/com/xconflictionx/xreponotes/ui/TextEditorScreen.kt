@@ -253,6 +253,26 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
         }
     }
 
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) {
+            drawerScope.launch {
+                val imageId = NoteImageStore.saveImageUri(context, uri)
+                if (imageId == null) {
+                    Toast.makeText(context, "Could not load selected image", Toast.LENGTH_SHORT).show()
+                } else {
+                    val prefix = if (pageContent.isBlank() || pageContent.endsWith("\n")) "" else "\n"
+                    savePage(body = "$pageContent$prefix![image](xreponotes-image://$imageId)\n")
+                    val uploaded = NoteImageStore.uploadImage(context, imageId, serverUrl, apiKey)
+                    Toast.makeText(
+                        context,
+                        if (uploaded) "Image added" else "Image saved locally (upload pending)",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     fun closeDrawer() {
         drawerOpen = false
@@ -673,18 +693,38 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                                 Column {
                                                     Box(Modifier.fillMaxWidth().height(3.dp).background(accent))
                                                     Column(Modifier.padding(10.dp)) {
-                                                        val cardPreview = remember(item.second.content) {
-                                                            renderMarkdownCardPreview(item.second.content)
+                                                        val cardImageIds = remember(item.second.content) {
+                                                            NoteImageStore.extractImageIds(item.second.content)
+                                                        }
+                                                        val cardPreview = remember(item.second.content, cardImageIds.isNotEmpty()) {
+                                                            val source = if (cardImageIds.isNotEmpty()) {
+                                                                NoteImageStore.stripInternalImageMarkdown(item.second.content)
+                                                            } else {
+                                                                item.second.content
+                                                            }
+                                                            renderMarkdownCardPreview(source)
+                                                        }
+                                                        if (cardImageIds.isNotEmpty()) {
+                                                            NoteCardThumbnail(
+                                                                imageId = cardImageIds.first(),
+                                                                extraCount = cardImageIds.size - 1,
+                                                                serverUrl = serverUrl,
+                                                                apiKey = apiKey,
+                                                                modifier = Modifier.fillMaxWidth()
+                                                            )
+                                                            if (cardPreview.text.isNotBlank()) {
+                                                                Spacer(Modifier.height(6.dp))
+                                                            }
                                                         }
                                                         if (cardPreview.text.isNotBlank()) {
                                                             Text(
                                                                 text = cardPreview,
-                                                                maxLines = 6,
+                                                                maxLines = if (cardImageIds.isNotEmpty()) 3 else 6,
                                                                 overflow = TextOverflow.Ellipsis,
                                                                 style = MaterialTheme.typography.bodySmall,
                                                                 color = MaterialTheme.colorScheme.onSurface
                                                             )
-                                                        } else {
+                                                        } else if (cardImageIds.isEmpty()) {
                                                             Text(
                                                                 text = "Empty note",
                                                                 style = MaterialTheme.typography.bodySmall,
@@ -878,26 +918,12 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                     if (!previewMode) {
                                         TextButton(
                                             onClick = {
-                                                drawerScope.launch {
-                                                    val imageId = NoteImageStore.saveClipboardImage(context)
-                                                    if (imageId == null) {
-                                                        Toast.makeText(context, "No image in clipboard", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        val prefix = if (pageContent.isBlank() || pageContent.endsWith("\n")) "" else "\n"
-                                                        savePage(body = "$pageContent$prefix![image](xreponotes-image://$imageId)\n")
-                                                        val uploaded = NoteImageStore.uploadImage(context, imageId, serverUrl, apiKey)
-                                                        Toast.makeText(
-                                                            context,
-                                                            if (uploaded) "Image pasted" else "Image saved locally (upload pending)",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
-                                                    }
-                                                }
+                                                imagePicker.launch(arrayOf("image/*"))
                                             }
                                         ) {
                                             Icon(Icons.Default.Image, null)
                                             Spacer(Modifier.width(4.dp))
-                                            Text("Paste image")
+                                            Text("Add Image")
                                         }
                                         TextButton(
                                             onClick = {
@@ -1526,6 +1552,73 @@ private fun renderMarkdownAsPlainText(title: String, markdown: String): String {
 }
 
 @Composable
+private fun NoteCardThumbnail(
+    imageId: String,
+    extraCount: Int,
+    serverUrl: String,
+    apiKey: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var bitmap by remember(imageId, serverUrl, apiKey) {
+        mutableStateOf(NoteImageStore.getCachedThumbnail(imageId))
+    }
+    var loading by remember(imageId, serverUrl, apiKey) { mutableStateOf(bitmap == null) }
+
+    LaunchedEffect(imageId, serverUrl, apiKey) {
+        if (bitmap == null) {
+            loading = true
+            bitmap = NoteImageStore.loadThumbnailBitmap(context, imageId, serverUrl, apiKey, maxDimension = 256)
+            loading = false
+        }
+    }
+
+    Surface(
+        modifier = modifier.height(76.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(6.dp)
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            val loaded = bitmap
+            when {
+                loaded != null -> Image(
+                    bitmap = loaded.asImageBitmap(),
+                    contentDescription = "Note image preview",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                }
+                else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "[Image]",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (extraCount > 0) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(4.dp),
+                    color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.72f),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = "+$extraCount",
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = androidx.compose.ui.graphics.Color.White
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun NoteImageView(
     imageId: String,
     serverUrl: String,
@@ -1553,7 +1646,7 @@ private fun NoteImageView(
                 bitmap = loaded.asImageBitmap(),
                 contentDescription = "Note image",
                 contentScale = ContentScale.FillWidth,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp)
+                modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp)
             )
             loading -> Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
