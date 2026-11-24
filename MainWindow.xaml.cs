@@ -924,12 +924,6 @@ public partial class MainWindow : Window
 
     private void InlineBodyBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && NoteImageStore.HasClipboardImage())
-        {
-            if (sender is TextBox tb && PasteImageIntoTextBox(tb))
-                e.Handled = true;
-            return;
-        }
         if (e.Key == Key.Escape || (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) != 0))
         {
             if (NoteOf(sender) is { } n)
@@ -1042,19 +1036,46 @@ public partial class MainWindow : Window
         }
     }
 
-    private void EditorBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    private void NoteTextBox_CanPaste(object sender, CanExecuteRoutedEventArgs e)
     {
-        if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) != 0 && NoteImageStore.HasClipboardImage())
+        if (sender is TextBox tb && !tb.IsReadOnly)
         {
-            if (PasteImageIntoTextBox(EditorBox))
-                e.Handled = true;
+            bool canPaste = false;
+            try
+            {
+                canPaste = NoteImageStore.HasClipboardImage() || Clipboard.ContainsText();
+            }
+            catch
+            {
+                // Clipboard may be temporarily locked by another process.
+            }
+            e.CanExecute = canPaste;
+            e.Handled = true;
         }
     }
 
-    private void PasteImage_Click(object sender, RoutedEventArgs e)
+    private void NoteTextBox_Paste(object sender, ExecutedRoutedEventArgs e)
     {
-        if (!PasteImageIntoTextBox(EditorBox))
-            DarkDialog.Show(this, "No image in clipboard", "Copy an image or screenshot to the clipboard first, then paste it into the note.");
+        if (sender is not TextBox tb || tb.IsReadOnly) return;
+
+        if (NoteImageStore.HasClipboardImage() && PasteImageIntoTextBox(tb))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        try
+        {
+            if (Clipboard.ContainsText())
+            {
+                tb.Paste();
+                e.Handled = true;
+            }
+        }
+        catch
+        {
+            // Clipboard may be temporarily locked by another process.
+        }
     }
 
     private bool PasteImageIntoTextBox(TextBox tb)

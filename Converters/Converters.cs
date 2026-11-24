@@ -11,7 +11,7 @@ public class MarkdownToFlowDocumentConverter : IValueConverter
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
         var text = value as string ?? "";
-        return MarkdownRenderer.Render(text);
+        return MarkdownRenderer.Render(text, compactImages: true);
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

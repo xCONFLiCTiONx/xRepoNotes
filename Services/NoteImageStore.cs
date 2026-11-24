@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
@@ -12,8 +13,10 @@ namespace RepoNotes.Services;
 public static class NoteImageStore
 {
     private const int MaxDimension = 2048;
+    private const int ThumbnailDecodeWidth = 260;
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"];
     private static readonly object ConfigLock = new();
+    private static readonly ConcurrentDictionary<string, BitmapSource> ThumbnailCache = new(StringComparer.Ordinal);
     private static string _serverUrl = "";
     private static string _apiKey = "";
     public static string LastError { get; private set; } = "";
@@ -130,6 +133,71 @@ public static class NoteImageStore
         }
     }
 
+    public static BitmapSource? TryGetCachedThumbnail(string id, int maxWidth = ThumbnailDecodeWidth)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        if (ThumbnailCache.TryGetValue(id, out var cachedThumb)) return cachedThumb;
+
+        var path = ImagePath(id);
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var thumb = DecodeImageBytes(File.ReadAllBytes(path), decodePixelWidth: maxWidth);
+            if (thumb != null) ThumbnailCache[id] = thumb;
+            return thumb;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static async Task<BitmapSource?> LoadThumbnailAsync(string id, int maxWidth = ThumbnailDecodeWidth)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+
+        var cached = TryGetCachedThumbnail(id, maxWidth);
+        if (cached != null) return cached;
+
+        var (url, key) = GetConfig();
+        if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(key))
+        {
+            LastError = "xServer URL or API key is not configured.";
+            return null;
+        }
+
+        return await Task.Run(() =>
+        {
+            try
+            {
+                using var client = new NotesApiClient(url, key);
+                var bytes = client.DownloadImage(id);
+                if (bytes == null || bytes.Length == 0)
+                {
+                    LastError = "Image not found on server (HTTP 404). Make sure the server is updated to include /api/images and the mobile app uploaded the image.";
+                    return null;
+                }
+
+                var thumb = DecodeImageBytes(bytes, decodePixelWidth: maxWidth);
+                if (thumb == null)
+                {
+                    LastError = "Downloaded image data could not be decoded.";
+                    return null;
+                }
+
+                File.WriteAllBytes(ImagePath(id), bytes);
+                ThumbnailCache[id] = thumb;
+                LastError = "";
+                return thumb;
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                return null;
+            }
+        }).ConfigureAwait(false);
+    }
+
     public static async Task<BitmapSource?> LoadImageAsync(string id)
     {
         if (string.IsNullOrWhiteSpace(id)) return null;
@@ -244,8 +312,11 @@ public static class NoteImageStore
         encoder.Save(ms);
 
         var id = Guid.NewGuid().ToString("N");
-        File.WriteAllBytes(ImagePath(id), ms.ToArray());
+        var pngBytes = ms.ToArray();
+        File.WriteAllBytes(ImagePath(id), pngBytes);
         File.WriteAllText(PendingPath(id), "image/png");
+        var thumb = DecodeImageBytes(pngBytes, decodePixelWidth: ThumbnailDecodeWidth);
+        if (thumb != null) ThumbnailCache[id] = thumb;
         return id;
     }
 
@@ -259,7 +330,7 @@ public static class NoteImageStore
         return tb;
     }
 
-    private static BitmapImage? DecodeImageBytes(byte[] bytes)
+    private static BitmapImage? DecodeImageBytes(byte[] bytes, int? decodePixelWidth = null)
     {
         if (bytes.Length == 0) return null;
         try
@@ -268,6 +339,8 @@ public static class NoteImageStore
             var bmp = new BitmapImage();
             bmp.BeginInit();
             bmp.CacheOption = BitmapCacheOption.OnLoad;
+            if (decodePixelWidth is > 0)
+                bmp.DecodePixelWidth = decodePixelWidth.Value;
             bmp.StreamSource = ms;
             bmp.EndInit();
             bmp.Freeze();

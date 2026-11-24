@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace RepoNotes.Services;
 
@@ -48,7 +49,7 @@ public static class MarkdownRenderer
         @"|(?<autolink><(?<autourl>https?:\/\/[^\s>]+)>|(?<autourl2>https?:\/\/[^\s<>\)\]]+))",
         RegexOptions.Compiled);
 
-    public static FlowDocument Render(string markdown, Thickness? pagePadding = null)
+    public static FlowDocument Render(string markdown, Thickness? pagePadding = null, bool compactImages = false)
     {
         var doc = new FlowDocument
         {
@@ -109,7 +110,7 @@ public static class MarkdownRenderer
             if ((m = ImageLine.Match(line.Trim())).Success)
             {
                 Flush();
-                doc.Blocks.Add(CreateImageBlock(m.Groups["id"].Value, m.Groups["alt"].Value));
+                doc.Blocks.Add(CreateImageBlock(m.Groups["id"].Value, m.Groups["alt"].Value, compactImages));
                 continue;
             }
 
@@ -434,30 +435,42 @@ public static class MarkdownRenderer
         if (pos < text.Length) p.Inlines.Add(new Run(text[pos..]));
     }
 
-    private static BlockUIContainer CreateImageBlock(string imageId, string alt)
+    private static BlockUIContainer CreateImageBlock(string imageId, string alt, bool compactImages)
     {
+        double maxWidth = compactImages ? 240 : 640;
+        double maxHeight = compactImages ? 110 : 480;
+
         var border = new Border
         {
             Background = CodeBg,
             BorderBrush = BorderColor,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(4),
-            Margin = new Thickness(0, 6, 0, 10),
+            Padding = compactImages ? new Thickness(2) : new Thickness(4),
+            Margin = compactImages ? new Thickness(0, 4, 0, 6) : new Thickness(0, 6, 0, 10),
             HorizontalAlignment = HorizontalAlignment.Left
         };
 
-        var cached = NoteImageStore.TryGetCachedImage(imageId);
-        if (cached != null)
+        Image CreateImageElement(BitmapSource source)
         {
-            border.Child = new Image
+            var img = new Image
             {
-                Source = cached,
+                Source = source,
                 Stretch = Stretch.Uniform,
-                MaxWidth = 520,
-                MaxHeight = 360,
+                MaxWidth = maxWidth,
+                MaxHeight = maxHeight,
                 ToolTip = string.IsNullOrWhiteSpace(alt) ? null : alt
             };
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            return img;
+        }
+
+        var cached = compactImages
+            ? NoteImageStore.TryGetCachedThumbnail(imageId)
+            : NoteImageStore.TryGetCachedImage(imageId);
+        if (cached != null)
+        {
+            border.Child = CreateImageElement(cached);
         }
         else
         {
@@ -465,26 +478,21 @@ public static class MarkdownRenderer
             {
                 Text = "Loading image…",
                 Foreground = Dim,
-                FontSize = 12,
+                FontSize = compactImages ? 11 : 12,
                 Padding = new Thickness(8, 4, 8, 4)
             };
 
             var dispatcher = Application.Current?.Dispatcher;
             _ = Task.Run(async () =>
             {
-                var loaded = await NoteImageStore.LoadImageAsync(imageId).ConfigureAwait(false);
+                var loaded = compactImages
+                    ? await NoteImageStore.LoadThumbnailAsync(imageId).ConfigureAwait(false)
+                    : await NoteImageStore.LoadImageAsync(imageId).ConfigureAwait(false);
                 dispatcher?.BeginInvoke(() =>
                 {
                     if (loaded != null)
                     {
-                        border.Child = new Image
-                        {
-                            Source = loaded,
-                            Stretch = Stretch.Uniform,
-                            MaxWidth = 520,
-                            MaxHeight = 360,
-                            ToolTip = string.IsNullOrWhiteSpace(alt) ? null : alt
-                        };
+                        border.Child = CreateImageElement(loaded);
                     }
                     else
                     {
@@ -492,7 +500,7 @@ public static class MarkdownRenderer
                         {
                             Text = "[Image unavailable]",
                             Foreground = Dim,
-                            FontSize = 12,
+                            FontSize = compactImages ? 11 : 12,
                             Padding = new Thickness(8, 4, 8, 4),
                             ToolTip = string.IsNullOrWhiteSpace(NoteImageStore.LastError) ? null : NoteImageStore.LastError
                         };
