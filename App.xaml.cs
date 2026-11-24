@@ -15,29 +15,8 @@ public partial class App : Application
     /// <summary>Database opens on a worker thread while the window is being built.</summary>
     public static Task<Database> DbTask { get; private set; } = null!;
 
-    public static string PendingOpenFilePath { get; } = Path.Combine(Database.DataDir, "pending_open_file.txt");
-
-    private static string? ExtractOpenFilePath(string[] args)
-    {
-        foreach (var raw in args)
-        {
-            if (string.IsNullOrWhiteSpace(raw)) continue;
-            var candidate = raw.Trim().Trim('"');
-            if (candidate.StartsWith('-') || candidate.StartsWith('/')) continue;
-            try
-            {
-                var full = Path.GetFullPath(candidate);
-                if (File.Exists(full)) return full;
-            }
-            catch { }
-        }
-        return null;
-    }
-
     protected override void OnStartup(StartupEventArgs e)
     {
-        var initialFile = ExtractOpenFilePath(e.Args);
-
         try
         {
             Native.SetCurrentProcessExplicitAppUserModelID(Native.AppUserModelId);
@@ -64,16 +43,6 @@ public partial class App : Application
 
         if (!createdNew)
         {
-            if (!string.IsNullOrEmpty(initialFile))
-            {
-                try
-                {
-                    Directory.CreateDirectory(Database.DataDir);
-                    File.WriteAllText(PendingOpenFilePath, initialFile);
-                }
-                catch { }
-            }
-
             // Signal running instance to bring itself forward and restore
             Native.SignalExistingInstance();
 
@@ -88,7 +57,7 @@ public partial class App : Application
         var db = new Database();
         DbTask = Task.FromResult(db);
 
-        var win = new MainWindow(db, initialFile);
+        var win = new MainWindow(db);
         win.Show();
     }
 

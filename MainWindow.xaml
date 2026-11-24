@@ -6,8 +6,6 @@
         WindowStartupLocation="CenterScreen" UseLayoutRounding="True"
         Background="{StaticResource Bg0}" Foreground="{StaticResource Text}" FontFamily="Segoe UI" FontSize="13"
         Opacity="0"
-        AllowDrop="True"
-        Drop="Window_Drop"
         PreviewKeyDown="Window_PreviewKeyDown">
 
     <Window.Resources>
@@ -169,7 +167,7 @@
             <Border x:Name="SidebarRoot" Background="{StaticResource Bg1}" BorderBrush="{StaticResource Border}" BorderThickness="0,0,1,0">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <Border Grid.Row="0" Margin="10,10,10,4" Padding="8" CornerRadius="6" Background="{StaticResource Bg2}" BorderBrush="{StaticResource Border}" BorderThickness="1">
                         <StackPanel>
@@ -197,23 +195,7 @@
                             </Button>
                         </StackPanel>
                     </Border>
-                    <Border Grid.Row="1" Margin="10,4,10,4" Padding="8" CornerRadius="6" Background="{StaticResource Bg2}" BorderBrush="{StaticResource Border}" BorderThickness="1">
-                        <StackPanel>
-                            <DockPanel Margin="0,0,0,6">
-                                <Button DockPanel.Dock="Right" Style="{StaticResource GhostButton}" Content="Open…" Padding="6,2" FontSize="11.5"
-                                        Foreground="{StaticResource Accent}" ToolTip="Open a file from disk (Ctrl+O)" Click="OpenFile_Click"/>
-                                <TextBlock Text="FILE EDITOR" Style="{StaticResource Dim}" FontSize="10.5" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                            </DockPanel>
-                            <Button x:Name="FileEditorTabButton" HorizontalContentAlignment="Left" Padding="8,6" Click="FileEditorTab_Click"
-                                    ToolTip="Switch to File Editor">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="📄" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                    <TextBlock x:Name="FileEditorTabLabel" Text="File Editor" FontSize="12.5" TextTrimming="CharacterEllipsis" MaxWidth="140" VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Button>
-                        </StackPanel>
-                    </Border>
-                    <Grid x:Name="ProjectsSection" Grid.Row="2">
+                    <Grid x:Name="ProjectsSection" Grid.Row="1">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
@@ -321,59 +303,6 @@
                             <ProgressBar IsIndeterminate="True" Width="220"/>
                             <Button Content="Cancel" Margin="0,14,0,0" HorizontalAlignment="Center" Click="CancelAi_Click"/>
                         </StackPanel>
-                    </Border>
-                </Grid>
-
-                <!-- File Editor -->
-                <Grid x:Name="FileEditorRoot" Visibility="Collapsed" Background="{StaticResource Bg0}">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    <Border Background="{StaticResource Bg1}" BorderBrush="{StaticResource Border}" BorderThickness="0,0,0,1" Padding="12,8">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <Button Style="{StaticResource GhostButton}" Content="←  Notes" Click="CloseFileEditor_Click" VerticalAlignment="Center"/>
-                            <StackPanel Grid.Column="1" Margin="12,0" VerticalAlignment="Center">
-                                <TextBlock x:Name="FileEditorTitle" Text="No file open" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                <TextBlock x:Name="FileEditorPathText" Text="Open a file or drag &amp; drop one here" Style="{StaticResource Dim}" FontSize="11" TextTrimming="CharacterEllipsis"/>
-                            </StackPanel>
-                            <Button Grid.Column="2" Style="{StaticResource GhostButton}" Content="Open file…" Margin="8,0,0,0" Click="OpenFile_Click" ToolTip="Open file (Ctrl+O)"/>
-                            <Button x:Name="FileReloadButton" Grid.Column="3" Style="{StaticResource GhostButton}" Content="Reload" Margin="6,0,0,0" Click="ReloadFile_Click" IsEnabled="False"/>
-                            <Button x:Name="FilePreviewToggleButton" Grid.Column="4" Style="{StaticResource GhostButton}" Content="Preview" Margin="6,0,0,0" Click="FilePreviewToggle_Click"/>
-                            <Button Grid.Column="5" Style="{StaticResource GhostButton}" Content="Save As…" Margin="6,0,0,0" Click="SaveFileAs_Click"/>
-                            <Button x:Name="FileSaveButton" Grid.Column="6" Content="Save" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" Click="SaveFile_Click" ToolTip="Save file (Ctrl+S)"/>
-                        </Grid>
-                    </Border>
-                    <Grid Grid.Row="1">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition x:Name="FilePreviewSplitterCol" Width="0"/>
-                            <ColumnDefinition x:Name="FilePreviewCol" Width="0"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBox x:Name="FileEditorBox" Style="{StaticResource BareTextBox}" Padding="18,14" AcceptsReturn="True" AcceptsTab="True"
-                                 TextWrapping="NoWrap" FontFamily="Consolas" FontSize="13"
-                                 HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                                 TextChanged="FileEditorBox_TextChanged"/>
-                        <GridSplitter x:Name="FilePreviewSplitter" Grid.Column="1" Width="5" HorizontalAlignment="Stretch" Background="{StaticResource Border}" Visibility="Collapsed"/>
-                        <Border x:Name="FilePreviewBorder" Grid.Column="2" Background="{StaticResource Bg1}" Visibility="Collapsed">
-                            <FlowDocumentScrollViewer x:Name="FilePreview" VerticalScrollBarVisibility="Auto" IsToolBarVisible="False"/>
-                        </Border>
-                    </Grid>
-                    <Border Grid.Row="2" Background="{StaticResource Bg1}" BorderBrush="{StaticResource Border}" BorderThickness="0,1,0,0" Padding="14,5">
-                        <DockPanel>
-                            <TextBlock x:Name="FileStatusRight" DockPanel.Dock="Right" Style="{StaticResource Dim}" FontSize="11.5" Text="UTF-8"/>
-                            <TextBlock x:Name="FileStatusLeft" Style="{StaticResource Dim}" FontSize="11.5" Text="Ready"/>
-                        </DockPanel>
                     </Border>
                 </Grid>
             </Grid>

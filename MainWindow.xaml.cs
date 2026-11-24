@@ -2,7 +2,6 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Reflection;
-using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -55,19 +54,12 @@ public partial class MainWindow : Window
     private NoteVM? _open;
     private List<string> _repos = [];
 
-    private string? _openFilePath;
-    private bool _fileDirty;
-    private bool _suppressFileDirty;
-    private bool _isFileEditorOpen;
-    private bool _filePreviewEnabled;
-    private readonly DispatcherTimer _filePreviewTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
-
     public MainWindow() : this(new Database()) { }
 
-    public MainWindow(Database db, string? initialFilePath = null)
+    public MainWindow(Database db)
     {
         InitializeComponent();
-        Native.Attach(this, cloakUntilRendered: true, onActivateInstance: ProcessPendingOpenFile);
+        Native.Attach(this, cloakUntilRendered: true);
 
         _db = db;
         _workDb = new Database(remoteEnabled: true, databaseFileName: "work_notebook.db", scope: NoteScope.Work);
@@ -99,14 +91,10 @@ public partial class MainWindow : Window
 
         _saveTimer.Tick += (_, _) => FlushSaves();
         _previewTimer.Tick += (_, _) => { _previewTimer.Stop(); UpdatePreview(); };
-        _filePreviewTimer.Tick += (_, _) => { _filePreviewTimer.Stop(); UpdateFilePreview(); };
         _syncTimer.Tick += async (_, _) => await RefreshFromServerAsync();
         _cardDragScrollTimer.Tick += CardDragScrollTimer_Tick;
         Loaded += async (_, _) =>
         {
-            if (!string.IsNullOrWhiteSpace(initialFilePath))
-                OpenFileInEditor(initialFilePath);
-            ProcessPendingOpenFile();
             if (!string.IsNullOrWhiteSpace(_db.LastRemoteError))
                 DarkDialog.Show(this, "Central database unavailable", _db.LastRemoteError);
             await ReloadReposAsync();
@@ -114,11 +102,6 @@ public partial class MainWindow : Window
         };
         Closing += (_, e) =>
         {
-            if (!ConfirmDiscardOrSaveFile())
-            {
-                e.Cancel = true;
-                return;
-            }
             _syncTimer.Stop();
             FlushSaves();
             if (_dirty.Count > 0)
@@ -525,7 +508,6 @@ public partial class MainWindow : Window
     {
         if (_suspendSelection) return;
         if (_open != null) CloseEditor();
-        if (_isFileEditorOpen) CloseFileEditor();
 
         if (RepoList.SelectedItem is SidebarEntry entry)
             _selKey = entry.Key;
@@ -687,11 +669,7 @@ public partial class MainWindow : Window
 
     private void VaultMode_Click(object sender, RoutedEventArgs e)
     {
-        if (_isVaultMode)
-        {
-            if (_isFileEditorOpen) CloseFileEditor();
-            return;
-        }
+        if (_isVaultMode) return;
         _lastNonVaultScope = _activeScope;
         SwitchScope(_activeScope == NoteScope.Work ? NoteScope.VaultWork : NoteScope.VaultPersonal);
     }
@@ -702,9 +680,8 @@ public partial class MainWindow : Window
 
     private void SwitchScope(NoteScope targetScope)
     {
-        if (_activeScope == targetScope && !_isFileEditorOpen) return;
+        if (_activeScope == targetScope) return;
         if (_open != null) CloseEditor();
-        if (_isFileEditorOpen) CloseFileEditor();
         FlushSaves();
         if (_dirty.Count > 0)
         {
@@ -763,10 +740,9 @@ public partial class MainWindow : Window
 
     private void UpdateSidebarNavigationUi()
     {
-        SetSidebarButtonActive(PersonalNotebookButton, !_isFileEditorOpen && _activeScope == NoteScope.Personal);
-        SetSidebarButtonActive(WorkNotebookButton, !_isFileEditorOpen && _activeScope == NoteScope.Work);
-        SetSidebarButtonActive(VaultButton, !_isFileEditorOpen && _isVaultMode);
-        SetSidebarButtonActive(FileEditorTabButton, _isFileEditorOpen);
+        SetSidebarButtonActive(PersonalNotebookButton, _activeScope == NoteScope.Personal);
+        SetSidebarButtonActive(WorkNotebookButton, _activeScope == NoteScope.Work);
+        SetSidebarButtonActive(VaultButton, _isVaultMode);
     }
 
     private void SetSidebarButtonActive(Button button, bool active)
@@ -798,7 +774,6 @@ public partial class MainWindow : Window
     {
         if (_db == null) return;
         if (_open != null) CloseEditor();
-        if (_isFileEditorOpen) CloseFileEditor();
         var defaultRepo = _activeScope == NoteScope.Personal ? (_selKey ?? "") : Database.DefaultRepoPathFor(_activeScope);
         var n = new NoteVM { RepoPath = defaultRepo, IsEditingInline = true };
         n.Edited += OnEdited;
@@ -1106,246 +1081,6 @@ public partial class MainWindow : Window
     {
         if (e.Key == Key.Escape && _open != null && !RepoCombo.IsDropDownOpen) { CloseEditor(); e.Handled = true; }
         else if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control) { NewNote(); e.Handled = true; }
-        else if (e.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control) { OpenFile_Click(this, new RoutedEventArgs()); e.Handled = true; }
-        else if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control && _isFileEditorOpen) { SaveFile_Click(this, new RoutedEventArgs()); e.Handled = true; }
-    }
-
-    // ---------- file editor ----------
-    private void ProcessPendingOpenFile()
-    {
-        try
-        {
-            if (!File.Exists(App.PendingOpenFilePath)) return;
-            var path = File.ReadAllText(App.PendingOpenFilePath).Trim();
-            File.Delete(App.PendingOpenFilePath);
-            if (!string.IsNullOrEmpty(path) && File.Exists(path))
-                OpenFileInEditor(path);
-        }
-        catch { }
-    }
-
-    private void Window_Drop(object sender, DragEventArgs e)
-    {
-        if (e.Data.GetDataPresent(DataFormats.FileDrop) &&
-            e.Data.GetData(DataFormats.FileDrop) is string[] files &&
-            files.Length > 0 &&
-            File.Exists(files[0]))
-        {
-            OpenFileInEditor(files[0]);
-        }
-    }
-
-    private void FileEditorTab_Click(object sender, RoutedEventArgs e)
-    {
-        ShowFileEditor();
-    }
-
-    private void OpenFile_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new OpenFileDialog
-        {
-            Title = "Open file in RepoNotes",
-            Filter = "All files (*.*)|*.*|Text & Markdown (*.txt;*.md)|*.txt;*.md|Code files (*.cs;*.json;*.xml;*.yaml;*.yml;*.js;*.ts;*.py)|*.cs;*.json;*.xml;*.yaml;*.yml;*.js;*.ts;*.py",
-            CheckFileExists = true
-        };
-        if (!string.IsNullOrEmpty(_openFilePath))
-            dlg.InitialDirectory = Path.GetDirectoryName(_openFilePath);
-
-        if (dlg.ShowDialog(this) == true)
-            OpenFileInEditor(dlg.FileName);
-    }
-
-    private void OpenFileInEditor(string filePath)
-    {
-        try
-        {
-            var fullPath = Path.GetFullPath(filePath);
-            if (!File.Exists(fullPath))
-            {
-                DarkDialog.Show(this, "File not found", $"Could not find:\n{fullPath}");
-                return;
-            }
-
-            if (!string.Equals(_openFilePath, fullPath, StringComparison.OrdinalIgnoreCase) && !ConfirmDiscardOrSaveFile())
-                return;
-
-            var content = File.ReadAllText(fullPath);
-            _openFilePath = fullPath;
-            _suppressFileDirty = true;
-            FileEditorBox.Text = content;
-            _suppressFileDirty = false;
-            _fileDirty = false;
-
-            var ext = Path.GetExtension(fullPath);
-            _filePreviewEnabled = ext.Equals(".md", StringComparison.OrdinalIgnoreCase) || ext.Equals(".markdown", StringComparison.OrdinalIgnoreCase);
-
-            ShowFileEditor();
-            UpdateFileEditorUi();
-            if (_filePreviewEnabled) UpdateFilePreview();
-            FileEditorBox.Focus();
-        }
-        catch (Exception ex)
-        {
-            DarkDialog.Show(this, "Could not open file", ex.Message);
-        }
-    }
-
-    private void ShowFileEditor()
-    {
-        if (_open != null) CloseEditor();
-        _isFileEditorOpen = true;
-        DashboardRoot.Visibility = Visibility.Collapsed;
-        EditorRoot.Visibility = Visibility.Collapsed;
-        FileEditorRoot.Visibility = Visibility.Visible;
-        UpdateFileEditorUi();
-        FileEditorBox.Focus();
-    }
-
-    private void CloseFileEditor()
-    {
-        if (!_isFileEditorOpen) return;
-        _isFileEditorOpen = false;
-        FileEditorRoot.Visibility = Visibility.Collapsed;
-        DashboardRoot.Visibility = Visibility.Visible;
-        UpdateFileEditorUi();
-    }
-
-    private void CloseFileEditor_Click(object sender, RoutedEventArgs e) => CloseFileEditor();
-
-    private void SaveFile_Click(object sender, RoutedEventArgs e)
-    {
-        if (string.IsNullOrEmpty(_openFilePath))
-        {
-            SaveFileAs_Click(sender, e);
-            return;
-        }
-        SaveOpenFile(_openFilePath);
-    }
-
-    private void SaveFileAs_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new SaveFileDialog
-        {
-            Title = "Save file as",
-            Filter = "All files (*.*)|*.*|Text & Markdown (*.txt;*.md)|*.txt;*.md",
-            FileName = string.IsNullOrEmpty(_openFilePath) ? "untitled.txt" : Path.GetFileName(_openFilePath)
-        };
-        if (!string.IsNullOrEmpty(_openFilePath))
-            dlg.InitialDirectory = Path.GetDirectoryName(_openFilePath);
-
-        if (dlg.ShowDialog(this) == true)
-            SaveOpenFile(dlg.FileName);
-    }
-
-    private bool SaveOpenFile(string targetPath)
-    {
-        try
-        {
-            File.WriteAllText(targetPath, FileEditorBox.Text ?? "");
-            _openFilePath = Path.GetFullPath(targetPath);
-            _fileDirty = false;
-            UpdateFileEditorUi();
-            FileStatusLeft.Text = $"Saved at {DateTime.Now:h:mm:ss tt}";
-            return true;
-        }
-        catch (Exception ex)
-        {
-            DarkDialog.Show(this, "Could not save file", ex.Message);
-            return false;
-        }
-    }
-
-    private void ReloadFile_Click(object sender, RoutedEventArgs e)
-    {
-        if (string.IsNullOrEmpty(_openFilePath)) return;
-        if (_fileDirty && !DarkDialog.Show(this, "Reload from disk?", "Discard unsaved changes and reload this file from disk?", "Reload", "Cancel"))
-            return;
-        _fileDirty = false;
-        OpenFileInEditor(_openFilePath);
-    }
-
-    private void FilePreviewToggle_Click(object sender, RoutedEventArgs e)
-    {
-        _filePreviewEnabled = !_filePreviewEnabled;
-        UpdateFileEditorUi();
-        if (_filePreviewEnabled) UpdateFilePreview();
-    }
-
-    private void FileEditorBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_suppressFileDirty) return;
-        _fileDirty = true;
-        UpdateFileEditorUi();
-        if (_filePreviewEnabled)
-        {
-            _filePreviewTimer.Stop();
-            _filePreviewTimer.Start();
-        }
-    }
-
-    private void UpdateFilePreview()
-    {
-        FilePreview.Document = MarkdownRenderer.Render(FileEditorBox.Text ?? "");
-    }
-
-    private void UpdateFileEditorUi()
-    {
-        string fileName = string.IsNullOrEmpty(_openFilePath) ? "No file open" : Path.GetFileName(_openFilePath);
-        string dirtyMark = _fileDirty ? " ●" : "";
-
-        FileEditorTabLabel.Text = string.IsNullOrEmpty(_openFilePath) ? "File Editor" : fileName + dirtyMark;
-        UpdateSidebarNavigationUi();
-
-        FileEditorTitle.Text = fileName + dirtyMark;
-        FileEditorPathText.Text = string.IsNullOrEmpty(_openFilePath) ? "Open a file or drag & drop one here" : _openFilePath;
-        FileReloadButton.IsEnabled = !string.IsNullOrEmpty(_openFilePath);
-        FileSaveButton.Content = _fileDirty ? "Save ●" : "Save";
-
-        if (_filePreviewEnabled)
-        {
-            FilePreviewSplitterCol.Width = new GridLength(5);
-            FilePreviewCol.Width = new GridLength(1, GridUnitType.Star);
-            FilePreviewSplitter.Visibility = Visibility.Visible;
-            FilePreviewBorder.Visibility = Visibility.Visible;
-            FilePreviewToggleButton.Foreground = (Brush)FindResource("Accent");
-        }
-        else
-        {
-            FilePreviewSplitterCol.Width = new GridLength(0);
-            FilePreviewCol.Width = new GridLength(0);
-            FilePreviewSplitter.Visibility = Visibility.Collapsed;
-            FilePreviewBorder.Visibility = Visibility.Collapsed;
-            FilePreviewToggleButton.Foreground = (Brush)FindResource("TextDim");
-        }
-
-        var text = FileEditorBox.Text ?? "";
-        int lines = text.Length == 0 ? 1 : text.Count(c => c == '\n') + 1;
-        FileStatusLeft.Text = _fileDirty ? "Modified (unsaved)" : (string.IsNullOrEmpty(_openFilePath) ? "Ready" : "Saved");
-        FileStatusRight.Text = $"{lines:N0} lines · {text.Length:N0} chars · UTF-8";
-    }
-
-    private bool ConfirmDiscardOrSaveFile()
-    {
-        if (!_fileDirty) return true;
-        var name = string.IsNullOrEmpty(_openFilePath) ? "this file" : Path.GetFileName(_openFilePath);
-        bool save = DarkDialog.Show(this, "Unsaved file changes", $"Save changes to “{name}” before continuing?", "Save", "Discard");
-        if (save)
-        {
-            if (string.IsNullOrEmpty(_openFilePath))
-            {
-                var dlg = new SaveFileDialog
-                {
-                    Title = "Save file as",
-                    Filter = "All files (*.*)|*.*",
-                    FileName = "untitled.txt"
-                };
-                if (dlg.ShowDialog(this) != true) return false;
-                return SaveOpenFile(dlg.FileName);
-            }
-            return SaveOpenFile(_openFilePath);
-        }
-        _fileDirty = false;
-        return true;
     }
 
     // ---------- settings ----------
