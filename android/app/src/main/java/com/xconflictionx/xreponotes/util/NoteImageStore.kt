@@ -1,12 +1,16 @@
 package com.xconflictionx.xreponotes.util
 
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Base64
 import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
@@ -60,30 +64,35 @@ object NoteImageStore {
     }
 
     suspend fun saveImageUri(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
-        val mime = context.contentResolver.getType(uri)
-        if (mime != null && !mime.startsWith("image/", ignoreCase = true)) return@withContext null
+        val resolverMime = context.contentResolver.getType(uri)
+        if (resolverMime != null && !resolverMime.startsWith("image/", ignoreCase = true)) return@withContext null
 
         val rawBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
         if (rawBytes.isEmpty()) return@withContext null
 
-        val decoded = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size) ?: return@withContext null
-        val oriented = applyExifOrientation(decoded, rawBytes)
-        if (oriented !== decoded) decoded.recycle()
+        // Verify the selected file is a decodable image without altering the original bytes.
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
 
-        val scaled = scaleDownIfNeeded(oriented, maxDimension = 2048)
-        if (scaled !== oriented) oriented.recycle()
-
-        val output = ByteArrayOutputStream()
-        var uploadMime = "image/png"
-        scaled.compress(Bitmap.CompressFormat.PNG, 100, output)
-        var finalBytes = output.toByteArray()
-        if (finalBytes.size > 12 * 1024 * 1024) {
-            output.reset()
-            scaled.compress(Bitmap.CompressFormat.JPEG, 90, output)
+        val maxServerBytes = 15 * 1024 * 1024
+        val finalBytes: ByteArray
+        val uploadMime: String
+        if (rawBytes.size <= maxServerBytes) {
+            finalBytes = rawBytes
+            uploadMime = detectMimeType(rawBytes, resolverMime)
+        } else {
+            val decoded = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size) ?: return@withContext null
+            val oriented = applyExifOrientation(decoded, rawBytes)
+            if (oriented !== decoded) decoded.recycle()
+            val scaled = scaleDownIfNeeded(oriented, maxDimension = 2048)
+            if (scaled !== oriented) oriented.recycle()
+            val output = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 92, output)
+            scaled.recycle()
             finalBytes = output.toByteArray()
             uploadMime = "image/jpeg"
         }
-        scaled.recycle()
 
         val id = UUID.randomUUID().toString().replace("-", "")
         imageFile(context, id).writeBytes(finalBytes)
@@ -192,8 +201,101 @@ object NoteImageStore {
     suspend fun loadImageBitmap(context: Context, imageId: String, serverUrlInput: String, apiKeyInput: String): Bitmap? =
         withContext(Dispatchers.IO) {
             val file = ensureCachedImageFile(context, imageId, serverUrlInput, apiKeyInput) ?: return@withContext null
-            BitmapFactory.decodeFile(file.absolutePath)
+            val bytes = file.readBytes()
+            val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext null
+            val oriented = applyExifOrientation(decoded, bytes)
+            if (oriented !== decoded) decoded.recycle()
+            oriented
         }
+
+    suspend fun downloadOriginalImage(
+        context: Context,
+        imageId: String,
+        serverUrlInput: String,
+        apiKeyInput: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val file = ensureCachedImageFile(context, imageId, serverUrlInput, apiKeyInput)
+                ?: return@withContext Result.failure(IllegalStateException("Image could not be loaded from server."))
+            val bytes = file.readBytes()
+            if (bytes.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException("Image file is empty."))
+            }
+
+            val mimeType = detectMimeType(bytes, null)
+            val ext = extensionForMimeType(mimeType)
+            val shortId = imageId.take(10)
+            val fileName = "xRepoNotes_$shortId.$ext"
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: return@withContext Result.failure(IllegalStateException("Could not create file in Downloads."))
+                try {
+                    resolver.openOutputStream(uri)?.use { out -> out.write(bytes) }
+                        ?: return@withContext Result.failure(IllegalStateException("Could not write image to Downloads."))
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                } catch (e: Exception) {
+                    resolver.delete(uri, null, null)
+                    throw e
+                }
+                Result.success(fileName)
+            } else {
+                @Suppress("DEPRECATION")
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                downloadsDir.mkdirs()
+                val outFile = File(downloadsDir, fileName)
+                outFile.writeBytes(bytes)
+                Result.success(fileName)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun detectMimeType(bytes: ByteArray, fallback: String?): String {
+        if (bytes.size >= 8 &&
+            bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() &&
+            bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()
+        ) return "image/png"
+        if (bytes.size >= 3 &&
+            bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte()
+        ) return "image/jpeg"
+        if (bytes.size >= 6 &&
+            bytes[0] == 0x47.toByte() && bytes[1] == 0x49.toByte() && bytes[2] == 0x46.toByte()
+        ) return "image/gif"
+        if (bytes.size >= 12 &&
+            bytes[0] == 0x52.toByte() && bytes[1] == 0x49.toByte() &&
+            bytes[2] == 0x46.toByte() && bytes[3] == 0x46.toByte() &&
+            bytes[8] == 0x57.toByte() && bytes[9] == 0x45.toByte() &&
+            bytes[10] == 0x42.toByte() && bytes[11] == 0x50.toByte()
+        ) return "image/webp"
+        if (bytes.size >= 2 &&
+            bytes[0] == 0x42.toByte() && bytes[1] == 0x4D.toByte()
+        ) return "image/bmp"
+        if (!fallback.isNullOrBlank() && fallback.startsWith("image/", ignoreCase = true)) {
+            return fallback
+        }
+        return "image/png"
+    }
+
+    private fun extensionForMimeType(mimeType: String): String = when (mimeType.lowercase()) {
+        "image/jpeg", "image/jpg" -> "jpg"
+        "image/webp" -> "webp"
+        "image/gif" -> "gif"
+        "image/bmp" -> "bmp"
+        "image/heic" -> "heic"
+        "image/heif" -> "heif"
+        else -> "png"
+    }
 
     fun extractImageIds(markdown: String): List<String> =
         internalImageRegex.findAll(markdown).map { it.groupValues[1] }.distinct().toList()
@@ -219,9 +321,12 @@ object NoteImageStore {
             inSampleSize *= 2
         }
         val opts = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
-        val sampled = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return null
-        val scaled = scaleDownIfNeeded(sampled, maxDimension)
-        if (scaled !== sampled) sampled.recycle()
+        val bytes = file.readBytes()
+        val sampled = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return null
+        val oriented = applyExifOrientation(sampled, bytes)
+        if (oriented !== sampled) sampled.recycle()
+        val scaled = scaleDownIfNeeded(oriented, maxDimension)
+        if (scaled !== oriented) oriented.recycle()
         return scaled
     }
 

@@ -1626,8 +1626,10 @@ private fun NoteImageView(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var bitmap by remember(imageId, serverUrl, apiKey) { mutableStateOf<android.graphics.Bitmap?>(null) }
     var loading by remember(imageId, serverUrl, apiKey) { mutableStateOf(true) }
+    var downloading by remember(imageId) { mutableStateOf(false) }
 
     LaunchedEffect(imageId, serverUrl, apiKey) {
         loading = true
@@ -1642,12 +1644,55 @@ private fun NoteImageView(
     ) {
         val loaded = bitmap
         when {
-            loaded != null -> Image(
-                bitmap = loaded.asImageBitmap(),
-                contentDescription = "Note image",
-                contentScale = ContentScale.FillWidth,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp)
-            )
+            loaded != null -> Box(Modifier.fillMaxWidth()) {
+                Image(
+                    bitmap = loaded.asImageBitmap(),
+                    contentDescription = "Note image",
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp)
+                )
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp),
+                    color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.68f),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    IconButton(
+                        onClick = {
+                            if (!downloading) {
+                                downloading = true
+                                scope.launch {
+                                    val result = NoteImageStore.downloadOriginalImage(context, imageId, serverUrl, apiKey)
+                                    downloading = false
+                                    result.onSuccess { fileName ->
+                                        Toast.makeText(context, "Saved to Downloads: $fileName", Toast.LENGTH_SHORT).show()
+                                    }.onFailure { err ->
+                                        Toast.makeText(context, err.message ?: "Could not download image", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(36.dp),
+                        enabled = !downloading
+                    ) {
+                        if (downloading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = androidx.compose.ui.graphics.Color.White
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = "Download original image",
+                                tint = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
             loading -> Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
             }

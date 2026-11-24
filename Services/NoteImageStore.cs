@@ -13,6 +13,7 @@ namespace RepoNotes.Services;
 public static class NoteImageStore
 {
     private const int MaxDimension = 2048;
+    private const int MaxServerBytes = 15 * 1024 * 1024;
     private const int ThumbnailDecodeWidth = 260;
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"];
     private static readonly object ConfigLock = new();
@@ -77,26 +78,26 @@ public static class NoteImageStore
     {
         try
         {
-            BitmapSource? source = null;
-            if (Clipboard.ContainsImage())
-            {
-                source = Clipboard.GetImage();
-            }
-            else if (Clipboard.ContainsFileDropList())
+            if (Clipboard.ContainsFileDropList())
             {
                 var files = Clipboard.GetFileDropList();
                 foreach (string? file in files)
                 {
                     if (!string.IsNullOrWhiteSpace(file) && IsSupportedImageFile(file) && File.Exists(file))
                     {
-                        source = DecodeImageBytes(File.ReadAllBytes(file));
-                        if (source != null) break;
+                        var saved = SaveImageFile(file);
+                        if (saved != null) return saved;
                     }
                 }
             }
 
-            if (source == null) return null;
-            return SaveBitmapSource(source);
+            if (Clipboard.ContainsImage())
+            {
+                var source = Clipboard.GetImage();
+                if (source != null) return SaveBitmapSource(source);
+            }
+
+            return null;
         }
         catch
         {
@@ -109,8 +110,25 @@ public static class NoteImageStore
         try
         {
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return null;
-            var source = DecodeImageBytes(File.ReadAllBytes(filePath));
-            return source == null ? null : SaveBitmapSource(source);
+            var rawBytes = File.ReadAllBytes(filePath);
+            if (rawBytes.Length == 0) return null;
+
+            // Validate image is decodable.
+            var decoded = DecodeImageBytes(rawBytes, decodePixelWidth: ThumbnailDecodeWidth);
+            if (decoded == null) return null;
+
+            if (rawBytes.Length <= MaxServerBytes)
+            {
+                var mime = DetectMimeType(rawBytes, filePath);
+                var id = Guid.NewGuid().ToString("N");
+                File.WriteAllBytes(ImagePath(id), rawBytes);
+                File.WriteAllText(PendingPath(id), mime);
+                ThumbnailCache[id] = decoded;
+                return id;
+            }
+
+            var full = DecodeImageBytes(rawBytes);
+            return full == null ? null : SaveBitmapSource(full);
         }
         catch
         {
@@ -243,6 +261,92 @@ public static class NoteImageStore
         }).ConfigureAwait(false);
     }
 
+    public static async Task<(byte[] Bytes, string MimeType, string Extension)?> GetOriginalImageAsync(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        var path = ImagePath(id);
+        byte[]? bytes = null;
+        if (File.Exists(path))
+        {
+            try
+            {
+                bytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
+            }
+            catch
+            {
+                bytes = null;
+            }
+        }
+
+        if (bytes == null || bytes.Length == 0)
+        {
+            var (url, key) = GetConfig();
+            if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(key))
+            {
+                LastError = "xServer URL or API key is not configured.";
+                return null;
+            }
+
+            bytes = await Task.Run(() =>
+            {
+                try
+                {
+                    using var client = new NotesApiClient(url, key);
+                    var downloaded = client.DownloadImage(id);
+                    if (downloaded != null && downloaded.Length > 0)
+                    {
+                        File.WriteAllBytes(path, downloaded);
+                        LastError = "";
+                    }
+                    return downloaded;
+                }
+                catch (Exception ex)
+                {
+                    LastError = ex.Message;
+                    return null;
+                }
+            }).ConfigureAwait(false);
+        }
+
+        if (bytes == null || bytes.Length == 0) return null;
+        var mime = DetectMimeType(bytes);
+        var ext = ExtensionForMimeType(mime);
+        return (bytes, mime, ext);
+    }
+
+    public static string DetectMimeType(byte[] bytes, string? filePath = null)
+    {
+        if (bytes.Length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47)
+            return "image/png";
+        if (bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF)
+            return "image/jpeg";
+        if (bytes.Length >= 6 && bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46)
+            return "image/gif";
+        if (bytes.Length >= 12 && bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 &&
+            bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50)
+            return "image/webp";
+        if (bytes.Length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4D)
+            return "image/bmp";
+
+        return Path.GetExtension(filePath ?? "").ToLowerInvariant() switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            _ => "image/png"
+        };
+    }
+
+    public static string ExtensionForMimeType(string mimeType) => mimeType.ToLowerInvariant() switch
+    {
+        "image/jpeg" or "image/jpg" => ".jpg",
+        "image/gif" => ".gif",
+        "image/webp" => ".webp",
+        "image/bmp" => ".bmp",
+        _ => ".png"
+    };
+
     public static async Task<bool> UploadImageAsync(string id)
     {
         if (string.IsNullOrWhiteSpace(id)) return false;
@@ -259,9 +363,13 @@ public static class NoteImageStore
             {
                 var bytes = File.ReadAllBytes(path);
                 if (bytes.Length == 0) return false;
-                using var client = new NotesApiClient(url, key);
-                client.UploadImage(id, "image/png", bytes);
                 var pending = PendingPath(id);
+                var mimeType = File.Exists(pending) ? File.ReadAllText(pending).Trim() : "";
+                if (string.IsNullOrWhiteSpace(mimeType))
+                    mimeType = DetectMimeType(bytes);
+
+                using var client = new NotesApiClient(url, key);
+                client.UploadImage(id, mimeType, bytes);
                 if (File.Exists(pending)) File.Delete(pending);
                 return true;
             }
@@ -304,20 +412,44 @@ public static class NoteImageStore
 
     private static string SaveBitmapSource(BitmapSource source)
     {
-        var scaled = ScaleDownIfNeeded(source);
-        var encoder = new PngBitmapEncoder();
-        encoder.Frames.Add(BitmapFrame.Create(scaled));
+        byte[] encodedBytes = EncodePng(source);
+        string mimeType = "image/png";
 
-        using var ms = new MemoryStream();
-        encoder.Save(ms);
+        if (encodedBytes.Length > MaxServerBytes)
+        {
+            var scaled = ScaleDownIfNeeded(source);
+            encodedBytes = EncodePng(scaled);
+            if (encodedBytes.Length > MaxServerBytes)
+            {
+                encodedBytes = EncodeJpeg(scaled, 92);
+                mimeType = "image/jpeg";
+            }
+        }
 
         var id = Guid.NewGuid().ToString("N");
-        var pngBytes = ms.ToArray();
-        File.WriteAllBytes(ImagePath(id), pngBytes);
-        File.WriteAllText(PendingPath(id), "image/png");
-        var thumb = DecodeImageBytes(pngBytes, decodePixelWidth: ThumbnailDecodeWidth);
+        File.WriteAllBytes(ImagePath(id), encodedBytes);
+        File.WriteAllText(PendingPath(id), mimeType);
+        var thumb = DecodeImageBytes(encodedBytes, decodePixelWidth: ThumbnailDecodeWidth);
         if (thumb != null) ThumbnailCache[id] = thumb;
         return id;
+    }
+
+    private static byte[] EncodePng(BitmapSource source)
+    {
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(source));
+        using var ms = new MemoryStream();
+        encoder.Save(ms);
+        return ms.ToArray();
+    }
+
+    private static byte[] EncodeJpeg(BitmapSource source, int quality)
+    {
+        var encoder = new JpegBitmapEncoder { QualityLevel = quality };
+        encoder.Frames.Add(BitmapFrame.Create(source));
+        using var ms = new MemoryStream();
+        encoder.Save(ms);
+        return ms.ToArray();
     }
 
     private static BitmapSource ScaleDownIfNeeded(BitmapSource source)

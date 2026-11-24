@@ -1,10 +1,13 @@
 using System.Diagnostics;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Microsoft.Win32;
 
 namespace RepoNotes.Services;
 
@@ -451,7 +454,7 @@ public static class MarkdownRenderer
             HorizontalAlignment = HorizontalAlignment.Left
         };
 
-        Image CreateImageElement(BitmapSource source)
+        UIElement CreateImageElement(BitmapSource source)
         {
             var img = new Image
             {
@@ -459,10 +462,40 @@ public static class MarkdownRenderer
                 Stretch = Stretch.Uniform,
                 MaxWidth = maxWidth,
                 MaxHeight = maxHeight,
-                ToolTip = string.IsNullOrWhiteSpace(alt) ? null : alt
+                ToolTip = string.IsNullOrWhiteSpace(alt) ? "Right-click to save original image" : alt
             };
             RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-            return img;
+
+            var menu = new ContextMenu();
+            var saveItem = new MenuItem { Header = "Save original image…" };
+            saveItem.Click += async (_, _) => await SaveOriginalImageAsync(imageId);
+            menu.Items.Add(saveItem);
+            img.ContextMenu = menu;
+
+            if (compactImages)
+                return img;
+
+            var container = new Grid();
+            container.Children.Add(img);
+
+            var downloadBtn = new Button
+            {
+                Content = "⬇ Save",
+                ToolTip = "Download original image",
+                FontSize = 11,
+                Padding = new Thickness(8, 3, 8, 3),
+                Margin = new Thickness(6),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Cursor = Cursors.Hand,
+                Foreground = Brushes.White,
+                Background = Frozen("#B010141B"),
+                BorderBrush = BorderColor,
+                BorderThickness = new Thickness(1)
+            };
+            downloadBtn.Click += async (_, _) => await SaveOriginalImageAsync(imageId);
+            container.Children.Add(downloadBtn);
+            return container;
         }
 
         var cached = compactImages
@@ -510,5 +543,45 @@ public static class MarkdownRenderer
         }
 
         return new BlockUIContainer(border) { Margin = new Thickness(0) };
+    }
+
+    private static async Task SaveOriginalImageAsync(string imageId)
+    {
+        var original = await NoteImageStore.GetOriginalImageAsync(imageId);
+        if (original == null)
+        {
+            var owner = Application.Current?.MainWindow;
+            if (owner != null)
+                DarkDialog.Show(owner, "Image unavailable", string.IsNullOrWhiteSpace(NoteImageStore.LastError)
+                    ? "Could not load the original image."
+                    : NoteImageStore.LastError);
+            return;
+        }
+
+        var (bytes, _, ext) = original.Value;
+        var shortId = imageId.Length > 10 ? imageId[..10] : imageId;
+        var extLabel = ext.TrimStart('.').ToUpperInvariant();
+        var dlg = new SaveFileDialog
+        {
+            Title = "Save original image",
+            FileName = $"xRepoNotes_{shortId}{ext}",
+            DefaultExt = ext,
+            Filter = $"{extLabel} Image (*{ext})|*{ext}|All files (*.*)|*.*"
+        };
+
+        var mainWin = Application.Current?.MainWindow;
+        bool? ok = mainWin != null ? dlg.ShowDialog(mainWin) : dlg.ShowDialog();
+        if (ok == true)
+        {
+            try
+            {
+                await File.WriteAllBytesAsync(dlg.FileName, bytes);
+            }
+            catch (Exception ex)
+            {
+                if (mainWin != null)
+                    DarkDialog.Show(mainWin, "Could not save image", ex.Message);
+            }
+        }
     }
 }
