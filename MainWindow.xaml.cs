@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private FlowDocumentScrollViewer? _dragCardViewer;
     private bool _isSelectingCardText;
     private bool _syncing;
+    private bool _reloadingRepos;
     private bool _syncErrorShown;
     private bool _hasSyncConflict;
 
@@ -359,42 +360,58 @@ public partial class MainWindow : Window
     }
 
     // ---------- startup ----------
+    private async void RefreshProjects_Click(object sender, RoutedEventArgs e)
+    {
+        await ReloadReposAsync();
+    }
+
     private async Task ReloadReposAsync()
     {
-        var root = _db.GetSetting("root");
-        if (root.Length == 0 || !Directory.Exists(root))
+        if (_reloadingRepos) return;
+        _reloadingRepos = true;
+        if (RefreshProjectsButton != null) RefreshProjectsButton.IsEnabled = false;
+        try
         {
-            NoRootText.Text = root.Length == 0
-                ? "Select your main repos directory in Settings to list git projects."
-                : "The repos directory no longer exists. Choose it again in Settings.";
-            NoRootHint.Visibility = Visibility.Visible;
-            _repos = [];
-        }
-        else
-        {
-            NoRootHint.Visibility = Visibility.Collapsed;
-            ScanBar.Visibility = Visibility.Visible;
-            RebuildEntries(); // show notes immediately, repos fill in when the scan is done
-            try
+            var root = _db.GetSetting("root");
+            if (root.Length == 0 || !Directory.Exists(root))
             {
-                _repos = await Task.Run(() => RepoScanner.Scan(root));
-                DetectAndMigrateRenamedProjects();
+                NoRootText.Text = root.Length == 0
+                    ? "Select your main repos directory in Settings to list git projects."
+                    : "The repos directory no longer exists. Choose it again in Settings.";
+                NoRootHint.Visibility = Visibility.Visible;
+                _repos = [];
             }
-            finally { ScanBar.Visibility = Visibility.Collapsed; }
-        }
-        RebuildEntries();
+            else
+            {
+                NoRootHint.Visibility = Visibility.Collapsed;
+                ScanBar.Visibility = Visibility.Visible;
+                if (_entries.Count == 0) RebuildEntries(); // show notes immediately, repos fill in when the scan is done
+                try
+                {
+                    _repos = await Task.Run(() => RepoScanner.Scan(root));
+                    DetectAndMigrateRenamedProjects();
+                }
+                finally { ScanBar.Visibility = Visibility.Collapsed; }
+            }
+            RebuildEntries();
 
-        // Publish the desktop's authoritative local Git repository list for mobile clients.
-        if (_db.IsRemoteConfigured)
+            // Publish the desktop's authoritative local Git repository list for mobile clients.
+            if (_db.IsRemoteConfigured)
+            {
+                try
+                {
+                    await Task.Run(() => _db.PublishRepositories(_repos));
+                }
+                catch (Exception ex)
+                {
+                    DarkDialog.Show(this, "Could not publish project list", ex.Message);
+                }
+            }
+        }
+        finally
         {
-            try
-            {
-                await Task.Run(() => _db.PublishRepositories(_repos));
-            }
-            catch (Exception ex)
-            {
-                DarkDialog.Show(this, "Could not publish project list", ex.Message);
-            }
+            _reloadingRepos = false;
+            if (RefreshProjectsButton != null) RefreshProjectsButton.IsEnabled = true;
         }
     }
 
@@ -469,31 +486,40 @@ public partial class MainWindow : Window
     {
         var prev = _selKey;
         _suspendSelection = true;
-        _entries.Clear();
-        _choices.Clear();
-
-        _entries.Add(new SidebarEntry { Key = null, Display = "All notes", Dot = RepoColors.For("").accent });
-        _entries.Add(new SidebarEntry { Key = "", Display = "General", Dot = RepoColors.For("").accent });
-        _choices.Add(new RepoChoice { Path = "", Name = "General (no project)" });
-
-        foreach (var r in _repos)
+        bool detachRepoCombo = _open != null;
+        if (detachRepoCombo) RepoCombo.DataContext = null;
+        try
         {
-            var name = Path.GetFileName(r);
-            _entries.Add(new SidebarEntry { Key = r, Display = name, IsRepo = true, Dot = RepoColors.For(r).accent });
-            _choices.Add(new RepoChoice { Path = r, Name = name });
-        }
+            _entries.Clear();
+            _choices.Clear();
 
-        var known = new HashSet<string>(_repos, StringComparer.OrdinalIgnoreCase);
-        foreach (var o in _notes.Select(n => n.RepoPath).Where(p => p.Length > 0 && !known.Contains(p) && !Database.IsSpecialScopeRepoPath(p)).Distinct(StringComparer.OrdinalIgnoreCase))
+            _entries.Add(new SidebarEntry { Key = null, Display = "All notes", Dot = RepoColors.For("").accent });
+            _entries.Add(new SidebarEntry { Key = "", Display = "General", Dot = RepoColors.For("").accent });
+            _choices.Add(new RepoChoice { Path = "", Name = "General (no project)" });
+
+            foreach (var r in _repos)
+            {
+                var name = Path.GetFileName(r);
+                _entries.Add(new SidebarEntry { Key = r, Display = name, IsRepo = true, Dot = RepoColors.For(r).accent });
+                _choices.Add(new RepoChoice { Path = r, Name = name });
+            }
+
+            var known = new HashSet<string>(_repos, StringComparer.OrdinalIgnoreCase);
+            foreach (var o in _notes.Select(n => n.RepoPath).Where(p => p.Length > 0 && !known.Contains(p) && !Database.IsSpecialScopeRepoPath(p)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var name = Path.GetFileName(o.TrimEnd('\\', '/'));
+                _entries.Add(new SidebarEntry { Key = o, Display = name, IsRepo = true, Missing = true, Dot = RepoColors.For(o).accent });
+                _choices.Add(new RepoChoice { Path = o, Name = name + " (not found)" });
+            }
+
+            Recount();
+        }
+        finally
         {
-            var name = Path.GetFileName(o.TrimEnd('\\', '/'));
-            _entries.Add(new SidebarEntry { Key = o, Display = name, IsRepo = true, Missing = true, Dot = RepoColors.For(o).accent });
-            _choices.Add(new RepoChoice { Path = o, Name = name + " (not found)" });
+            if (detachRepoCombo) RepoCombo.ClearValue(DataContextProperty);
+            _suspendSelection = false;
         }
-
-        Recount();
-        _suspendSelection = false;
-        RepoList.SelectedItem = _entries.FirstOrDefault(e => e.Key == prev) ?? _entries[0];
+        RepoList.SelectedItem = _entries.FirstOrDefault(e => string.Equals(e.Key, prev, StringComparison.OrdinalIgnoreCase)) ?? _entries[0];
         RefreshView();
     }
 
