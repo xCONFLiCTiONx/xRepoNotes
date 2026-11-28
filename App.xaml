@@ -7,6 +7,18 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Theme.xaml"/>
             </ResourceDictionary.MergedDictionaries>
+            <!-- Suppress WPF's default dotted keyboard focus adorner globally (including sticky notes and Alt+Tab) -->
+            <Style x:Key="{x:Static SystemParameters.FocusVisualStyleKey}" TargetType="Control">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate/>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style TargetType="ScrollViewer">
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            </Style>
             <BooleanToVisibilityConverter x:Key="BoolToVis"/>
             <conv:InverseBoolToVisConverter x:Key="InverseBoolToVis"/>
             <conv:MarkdownToFlowDocumentConverter x:Key="MarkdownToFlowDocumentConverter"/>
