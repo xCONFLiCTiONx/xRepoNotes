@@ -52,12 +52,6 @@ public partial class App : Application
         }
 
         DispatcherUnhandledException += OnUnhandled;
-
-        // Suppress WPF's legacy dotted keyboard focus rectangle globally (including sticky notes and after Alt+Tab).
-        FrameworkElement.FocusVisualStyleProperty.OverrideMetadata(
-            typeof(FrameworkElement),
-            new FrameworkPropertyMetadata(null));
-
         base.OnStartup(e);
 
         var db = new Database();
