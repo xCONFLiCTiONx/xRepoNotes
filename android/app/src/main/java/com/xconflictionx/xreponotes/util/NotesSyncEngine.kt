@@ -27,7 +27,7 @@ sealed class SyncResult {
 }
 
 object NotesSyncEngine {
-    const val DEFAULT_SERVER_URL = "http://192.168.88.50:11436"
+    const val DEFAULT_SERVER_URL = ""
     const val PREF_KEY_SERVER_URL = "xreponotes_server_url"
 
     data class ServerRepository(val path: String, val name: String)

@@ -1096,7 +1096,7 @@ fun TextEditorScreen(viewModel: MainViewModel, onOpenClick: () -> Unit, onSaveAs
                                 onValueChange = { aiUrlDraft = it },
                                 modifier = Modifier.fillMaxWidth(),
                                 label = { Text("AI Server URL") },
-                                placeholder = { Text("https://inference.home.xconflictionx.cc") },
+                                placeholder = { Text("https://inference.xserver.local") },
                                 singleLine = true
                             )
                             Box(Modifier.fillMaxWidth()) {

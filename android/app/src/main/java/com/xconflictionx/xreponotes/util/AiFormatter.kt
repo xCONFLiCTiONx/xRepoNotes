@@ -33,7 +33,7 @@ data class AiTestResult(
  */
 object AiFormatter {
     const val MAX_CHARS = 20_000
-    const val DEFAULT_AI_SERVER_URL = "https://inference.home.xconflictionx.cc"
+    const val DEFAULT_AI_SERVER_URL = ""
     const val DEFAULT_AI_MODEL = "xAssistant"
     const val DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
     const val PREF_KEY_AI_URL = "xreponotes_ai_server_url"
